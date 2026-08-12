@@ -1,0 +1,16 @@
+{
+  "name": "grab-court-server",
+  "version": "1.0.0",
+  "description": "可扩展的球场抢订平台后端 (插件化球场适配器 + 定时调度)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "js-yaml": "^4.1.0",
+    "node-cron": "^3.0.3",
+    "undici": "^7.29.0"
+  }
+}

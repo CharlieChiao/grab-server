@@ -1,0 +1,57 @@
+# ============================================
+# PICKLE POP 球场配置 (声明式)
+# 前端展示 + 后端适配器共用
+# ============================================
+id: picklepop
+name: PICKLE POP 匹克球&网球（宝安摩天轮馆）
+logo: https://img.pospal.cn/storeLogo/2fc28099-4e8c-4a17-b96e-ca45775021ef.jpg
+desc: 银豹(Pospal)后端。余额支付可纯脚本闭环下单。
+
+# 后端接口参数
+backend:
+  base: https://wxservice-stg48.pospal.cn
+  storeId: 5972810
+  projectUid: "1758968368384975712"
+  payMethodBalance: 40      # 会员余额支付(已验证, 直接扣款无需微信)
+  payMethodWechat: 900      # 微信支付(返回script需手动付)
+
+# 放场规则(提前天数): 用于定时开抢时刻计算
+advanceDays:
+  pickle: 7                 # 匹克球提前7天
+  tennis: 3                 # 网球提前3天
+
+# 场地列表(展示 + classroomUid 映射)
+courts:
+  - name: 匹克球1号
+    type: pickle
+    uid: "1762926776857281756"
+  - name: 匹克球2号
+    type: pickle
+    uid: "1762926785984776840"
+  - name: 匹克球3号
+    type: pickle
+    uid: "1762926794897651371"
+  - name: 匹克球4号
+    type: pickle
+    uid: "1762926801731761788"
+  - name: 匹克球5号
+    type: pickle
+    uid: "1762926808515542995"
+  - name: 匹克球6号
+    type: pickle
+    uid: "1762926815551294754"
+  - name: 网球1号澳网风
+    type: tennis
+    uid: "1762927653888739869"
+  - name: 网球2号法网风
+    type: tennis
+    uid: "1765467643308313996"
+  - name: 网球3号法网风
+    type: tennis
+    uid: "1767248699319486131"
+
+# 凭证字段说明(实际值放 data/credentials.json)
+credentialSchema:
+  - key: PSPLVISITORID
+    label: 访客标识
+    desc: 从微信小程序抓包获取; ready检测即验证其有效性

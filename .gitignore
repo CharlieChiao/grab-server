@@ -1,0 +1,4 @@
+node_modules/
+data/credentials.json
+config/jobs.json
+*.log
