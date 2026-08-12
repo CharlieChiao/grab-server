@@ -11,6 +11,35 @@ node server.js          # 默认端口 3000, 可用 PORT=8080 node server.js
 
 启动后访问 `http://localhost:3000/` 查看接口列表。
 
+### 后台运行 (脚本方式)
+
+仓库自带 `restart.sh`（PM2 薄壳）：
+
+```bash
+./restart.sh            # 重启
+./restart.sh start      # 启动
+./restart.sh stop       # 停止
+./restart.sh status     # 状态 + 最近日志
+./restart.sh logs       # 跟随日志
+```
+
+### 作为服务托管 (开机自启 / 崩溃自动重启, 推荐生产)
+
+使用 PM2 + systemd (`pm2-root.service`) 组合：
+
+```bash
+sudo ./deploy/install-pm2.sh        # 首次安装: 启动 grab-court + 生成 pm2-root.service + pm2 save
+pm2 list                            # 查看进程
+pm2 restart grab-court              # 重启
+pm2 stop grab-court                 # 停止
+pm2 logs grab-court                 # 跟随日志
+pm2 save                            # 每次改完 pm2 状态后固化, 供下次开机恢复
+systemctl status pm2-root           # 查看 PM2 守护进程本身
+```
+
+- 应用日志追加到项目根目录的 `server.out.log` / `server.err.log`（由 `ecosystem.config.cjs` 指定）
+- 开机时机制：`pm2-root.service` 启动 → PM2 恢复 `pm2 save` 快照 → grab-court 自动拉起
+
 ## HTTP 接口
 
 | 方法 | 路径 | 说明 |
