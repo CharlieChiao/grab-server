@@ -27,6 +27,16 @@ router.post("/account/claim-legacy", (req, res) => {
   }
 });
 
+router.post("/devices/pair", (req, res) => {
+  const raw = req.body?.payload;
+  let payload;
+  try { payload = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return res.status(400).json({ error: "配对二维码无效" }); }
+  if (!payload || payload.type !== "court_capture_pair" || !payload.deviceId || !payload.publicKey) return res.status(400).json({ error: "配对二维码格式无效" });
+  const now = nowIso();
+  const sql = "INSERT INTO devices(device_id, user_id, public_key, device_name, paired_at, last_seen_at, revoked) VALUES(?, ?, ?, ?, ?, ?, 0) ON CONFLICT(device_id) DO UPDATE SET user_id=excluded.user_id, public_key=excluded.public_key, device_name=excluded.device_name, last_seen_at=excluded.last_seen_at, revoked=0";
+  db.prepare(sql).run(payload.deviceId, req.user.id, payload.publicKey, payload.deviceName || "Court Capture", now, now);
+  res.json({ ok: true, message: "电脑配对成功", deviceId: payload.deviceId });
+});
 router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues() }));
 router.get("/venues/:id", (req, res) => {
   const venue = getVenue(req.params.id);
@@ -74,3 +84,4 @@ router.get("/credentials/:venueId", (req, res) => {
   res.json({ ok: true, configured: !!credential, keys: credential ? Object.keys(credential) : [] });
 });
 export default router;
+
