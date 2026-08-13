@@ -1,11 +1,11 @@
-/**
- * PICKLE POP 球场适配器 (银豹 Pospal 后端)
- * 实现统一接口: meta / ready / grab / listSlots (+ 可选 preheat / buildGrabRequest)
+﻿/**
+ * PICKLE POP 鐞冨満閫傞厤鍣?(閾惰惫 Pospal 鍚庣)
+ * 瀹炵幇缁熶竴鎺ュ彛: meta / ready / grab / listSlots (+ 鍙€?preheat / buildGrabRequest)
  *
- * 高精度抢购设计:
- *  - 使用 undici 的 keep-alive Pool 复用 TCP/TLS 连接 (避免首发时的握手开销)
- *  - preheat(): 抢购前主动建连 + 一次轻量请求预热
- *  - buildGrabRequest(): 预构建请求 URL / headers / body, 到点立刻 dispatch
+ * 楂樼簿搴︽姠璐璁?
+ *  - 浣跨敤 undici 鐨?keep-alive Pool 澶嶇敤 TCP/TLS 杩炴帴 (閬垮厤棣栧彂鏃剁殑鎻℃墜寮€閿€)
+ *  - preheat(): 鎶㈣喘鍓嶄富鍔ㄥ缓杩?+ 涓€娆¤交閲忚姹傞鐑?
+ *  - buildGrabRequest(): 棰勬瀯寤鸿姹?URL / headers / body, 鍒扮偣绔嬪埢 dispatch
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -15,13 +15,13 @@ import { Pool, request as undiciRequest } from "undici";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 读取声明式配置
+// 璇诲彇澹版槑寮忛厤缃?
 const cfg = yaml.load(fs.readFileSync(path.join(__dirname, "venue.yml"), "utf8"));
 const B = cfg.backend;
 
 /**
- * 长连接池 (针对银豹域名), 复用 TCP/TLS, 抢购首发不再付握手成本。
- * connections: 允许多路并发, keepAliveTimeout: 长一点避免闲置断开。
+ * 闀胯繛鎺ユ睜 (閽堝閾惰惫鍩熷悕), 澶嶇敤 TCP/TLS, 鎶㈣喘棣栧彂涓嶅啀浠樻彙鎵嬫垚鏈€?
+ * connections: 鍏佽澶氳矾骞跺彂, keepAliveTimeout: 闀夸竴鐐归伩鍏嶉棽缃柇寮€銆?
  */
 const pool = new Pool(B.base, {
   connections: 8,
@@ -31,7 +31,7 @@ const pool = new Pool(B.base, {
   connect: { timeout: 8000 },
 });
 
-/** 构造银豹请求头 */
+/** 鏋勯€犻摱璞硅姹傚ご */
 function headers(cred) {
   return {
     PSPLVISITORAUTO: "API",
@@ -50,7 +50,7 @@ function headers(cred) {
 }
 
 /**
- * 统一 POST (走 pool, 复用连接)
+ * 缁熶竴 POST (璧?pool, 澶嶇敤杩炴帴)
  */
 async function post(path_, cred, payload, timeoutMs = 12000) {
   const ctrl = new AbortController();
@@ -76,7 +76,7 @@ async function post(path_, cred, payload, timeoutMs = 12000) {
 
 const uidByName = Object.fromEntries(cfg.courts.map((c) => [c.name, c.uid]));
 
-/** meta: 供前端展示 */
+/** meta: 渚涘墠绔睍绀?*/
 export const meta = {
   id: cfg.id,
   name: cfg.name,
@@ -87,12 +87,17 @@ export const meta = {
   raw: cfg,
 };
 
+export const riskProfile = {
+  mode: "serial-exponential-backoff",
+  booking: { minIntervalMs: 3000, jitterMs: 800, cooldownMs: 10000, maxRetry: 5, backoff: [3000, 6000, 12000, 20000] },
+};
+
 /**
- * ready 检测 = PSPLVISITORID 有效性 (含抖动重试)
+ * ready 妫€娴?= PSPLVISITORID 鏈夋晥鎬?(鍚姈鍔ㄩ噸璇?
  */
 export async function ready(cred) {
   if (!cred || !cred.PSPLVISITORID) {
-    return { ok: false, detail: "缺少 PSPLVISITORID" };
+    return { ok: false, detail: "缂哄皯 PSPLVISITORID" };
   }
   let last = null;
   for (let i = 0; i < 3; i++) {
@@ -105,7 +110,7 @@ export async function ready(cred) {
       if (json && json.isLogin) {
         return {
           ok: true,
-          detail: `已登录: ${json.name || ""} ${json.phone || ""}`,
+          detail: `宸茬櫥褰? ${json.name || ""} ${json.phone || ""}`,
           extra: { balance: json.balance, uid: json.uid },
         };
       }
@@ -114,35 +119,35 @@ export async function ready(cred) {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  return { ok: false, detail: "登录态无效(可能PSPLVISITORID已过期,需重新抓包)", extra: last || {} };
+  return { ok: false, detail: "鐧诲綍鎬佹棤鏁?鍙兘PSPLVISITORID宸茶繃鏈?闇€閲嶆柊鎶撳寘)", extra: last || {} };
 }
 
 /**
- * 预热: 建立/保持长连接, 让抢购首发无握手成本。
- * 通过发一个轻量的登录态查询请求把连接池热起来。
+ * 棰勭儹: 寤虹珛/淇濇寔闀胯繛鎺? 璁╂姠璐鍙戞棤鎻℃墜鎴愭湰銆?
+ * 閫氳繃鍙戜竴涓交閲忕殑鐧诲綍鎬佹煡璇㈣姹傛妸杩炴帴姹犵儹璧锋潵銆?
  */
 export async function preheat(cred) {
-  if (!cred || !cred.PSPLVISITORID) return { ok: false, detail: "缺少 PSPLVISITORID" };
+  if (!cred || !cred.PSPLVISITORID) return { ok: false, detail: "缂哄皯 PSPLVISITORID" };
   try {
     const t0 = Date.now();
     await post("/wxapi/customeraccount/FindLoginInfo", cred, {
       storeId: B.storeId,
       isRefresh: false,
     }, 5000);
-    return { ok: true, detail: `预热完成, 耗时 ${Date.now() - t0}ms` };
+    return { ok: true, detail: `棰勭儹瀹屾垚, 鑰楁椂 ${Date.now() - t0}ms` };
   } catch (e) {
-    return { ok: false, detail: "预热失败: " + String(e) };
+    return { ok: false, detail: "棰勭儹澶辫触: " + String(e) };
   }
 }
 
 /**
- * 预构建抢购请求 (URL/headers/body 提前拼好, 到点直接 dispatch)
+ * 棰勬瀯寤烘姠璐姹?(URL/headers/body 鎻愬墠鎷煎ソ, 鍒扮偣鐩存帴 dispatch)
  *
- * target 支持两种形态:
- *   1) 单场地(旧): { court, date, time, cost, ext? }
- *   2) 多场地/多时段(新): { date, courts: [{court, time, cost}, ...], ext? }
- *      - 同一订单一次性下多个 classroomItems, 成功则全部抢到, 失败全部失败(银豹原生行为)
- *      - 也支持 { courts:[...], time, cost } 顶层公共字段 (同一时段多场地)
+ * target 鏀寔涓ょ褰㈡€?
+ *   1) 鍗曞満鍦?鏃?: { court, date, time, cost, ext? }
+ *   2) 澶氬満鍦?澶氭椂娈?鏂?: { date, courts: [{court, time, cost}, ...], ext? }
+ *      - 鍚屼竴璁㈠崟涓€娆℃€т笅澶氫釜 classroomItems, 鎴愬姛鍒欏叏閮ㄦ姠鍒? 澶辫触鍏ㄩ儴澶辫触(閾惰惫鍘熺敓琛屼负)
+ *      - 涔熸敮鎸?{ courts:[...], time, cost } 椤跺眰鍏叡瀛楁 (鍚屼竴鏃舵澶氬満鍦?
  *
  * @returns {{ path:string, headers:object, body:string }}
  */
@@ -170,20 +175,20 @@ export function buildGrabRequest(target, cred) {
 }
 
 /**
- * 把 target 统一归一化为 items: [{uid, begin, end, cost}]
- * 兼容:
- *   { court, date, time, cost }                                 -> 1 项
- *   { date, courts:["A","B"], time, cost }                      -> N 项(同时段)
- *   { date, courts:[{court,time,cost}, ...] }                   -> N 项(可各时段)
- *   { date, courts:[{court}], time, cost }                      -> 混合
+ * 鎶?target 缁熶竴褰掍竴鍖栦负 items: [{uid, begin, end, cost}]
+ * 鍏煎:
+ *   { court, date, time, cost }                                 -> 1 椤?
+ *   { date, courts:["A","B"], time, cost }                      -> N 椤?鍚屾椂娈?
+ *   { date, courts:[{court,time,cost}, ...] }                   -> N 椤?鍙悇鏃舵)
+ *   { date, courts:[{court}], time, cost }                      -> 娣峰悎
  */
 function normalizeItems(target) {
   const date = target.date;
-  if (!date) throw new Error("target.date 必填");
+  if (!date) throw new Error("target.date 蹇呭～");
 
   const toItem = (courtName, time, cost) => {
-    if (!courtName) throw new Error("courts[].court 必填");
-    if (!time) throw new Error("time 必填(顶层或每项)");
+    if (!courtName) throw new Error("courts[].court 蹇呭～");
+    if (!time) throw new Error("time 蹇呭～(椤跺眰鎴栨瘡椤?");
     const uid = uidByName[courtName] || courtName;
     const [h] = String(time).split(":");
     return {
@@ -194,7 +199,7 @@ function normalizeItems(target) {
     };
   };
 
-  // 多场地形态
+  // 澶氬満鍦板舰鎬?
   if (Array.isArray(target.courts) && target.courts.length > 0) {
     return target.courts.map((c) => {
       if (typeof c === "string") {
@@ -204,12 +209,12 @@ function normalizeItems(target) {
     });
   }
 
-  // 单场地形态(向后兼容)
+  // 鍗曞満鍦板舰鎬?鍚戝悗鍏煎)
   return [toItem(target.court, target.time, target.cost)];
 }
 
 /**
- * 单次抢票请求 (走预构建, 极简路径, 用于高精度首发或重试)
+ * 鍗曟鎶㈢エ璇锋眰 (璧伴鏋勫缓, 鏋佺畝璺緞, 鐢ㄤ簬楂樼簿搴﹂鍙戞垨閲嶈瘯)
  */
 async function fireOnce(prebuilt, timeoutMs = 8000) {
   const ctrl = new AbortController();
@@ -232,8 +237,8 @@ async function fireOnce(prebuilt, timeoutMs = 8000) {
 }
 
 /**
- * 抢票入口 (兼容原签名: 允许直接调用, 内部走 buildGrabRequest + fireOnce)
- * scheduler 高精度模式会直接用 buildGrabRequest + fireOnce, 不走这里。
+ * 鎶㈢エ鍏ュ彛 (鍏煎鍘熺鍚? 鍏佽鐩存帴璋冪敤, 鍐呴儴璧?buildGrabRequest + fireOnce)
+ * scheduler 楂樼簿搴︽ā寮忎細鐩存帴鐢?buildGrabRequest + fireOnce, 涓嶈蛋杩欓噷銆?
  */
 export async function grab(target, cred) {
   const prebuilt = buildGrabRequest(target, cred);
@@ -241,7 +246,7 @@ export async function grab(target, cred) {
   return interpretGrabResponse(json);
 }
 
-/** 解释银豹返回 */
+/** 瑙ｉ噴閾惰惫杩斿洖 */
 export function interpretGrabResponse(json) {
   if (json && json.successed) {
     const res = json.result || {};
@@ -249,26 +254,26 @@ export function interpretGrabResponse(json) {
       return {
         success: true,
         orderId: res.apptUid,
-        message: "下单成功但返回微信支付参数(余额可能不足), 需手动支付",
+        message: "涓嬪崟鎴愬姛浣嗚繑鍥炲井淇℃敮浠樺弬鏁?浣欓鍙兘涓嶈冻), 闇€鎵嬪姩鏀粯",
         raw: json,
       };
     }
-    return { success: true, orderId: res.apptUid, message: "抢到并已余额支付", raw: json };
+    return { success: true, orderId: res.apptUid, message: "鎶㈠埌骞跺凡浣欓鏀粯", raw: json };
   }
   return {
     success: false,
-    message: (json && (json.message || JSON.stringify(json.messages) || `errorCode=${json.errorCode}`)) || "下单失败",
+    message: (json && (json.message || JSON.stringify(json.messages) || `errorCode=${json.errorCode}`)) || "涓嬪崟澶辫触",
     raw: json,
   };
 }
 
-/** 高精度首发: 由 scheduler 调用. 单次极简发射(不含重试, 重试由 scheduler 控) */
+/** 楂樼簿搴﹂鍙? 鐢?scheduler 璋冪敤. 鍗曟鏋佺畝鍙戝皠(涓嶅惈閲嶈瘯, 閲嶈瘯鐢?scheduler 鎺? */
 export async function fireGrab(prebuilt) {
   const { json } = await fireOnce(prebuilt);
   return interpretGrabResponse(json);
 }
 
-/** (可选) 查询某天可约时段 */
+/** (鍙€? 鏌ヨ鏌愬ぉ鍙害鏃舵 */
 export async function listSlots(query, cred) {
   const { json } = await post("/wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2", cred, {
     dateTime: query.date,
@@ -287,4 +292,5 @@ export async function listSlots(query, cred) {
   }));
 }
 
-export default { meta, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse };
+export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse };
+

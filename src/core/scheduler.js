@@ -1,33 +1,35 @@
-/**
- * 调度器 (高精度抢购版):
- *  1) 精确开抢: 到 job.fireAt 时刻毫秒级发射; 提前 preheat 预热长连接
- *  2) ready 心跳: 每小时对有任务的球场做一次 ready 检测
- *  3) 临近开抢加密检测: 任一 pending 任务开抢前 10 分钟内, 每分钟 ready 一次
+﻿/**
+ * 璋冨害鍣?(楂樼簿搴︽姠璐増):
+ *  1) 绮剧‘寮€鎶? 鍒?job.fireAt 鏃跺埢姣绾у彂灏? 鎻愬墠 preheat 棰勭儹闀胯繛鎺?
+ *  2) ready 蹇冭烦: 姣忓皬鏃跺鏈変换鍔＄殑鐞冨満鍋氫竴娆?ready 妫€娴?
+ *  3) 涓磋繎寮€鎶㈠姞瀵嗘娴? 浠讳竴 pending 浠诲姟寮€鎶㈠墠 10 鍒嗛挓鍐? 姣忓垎閽?ready 涓€娆?
  *
- * 精度实现要点:
- *   - tick 每 5s 扫描 pending 任务, 发现 fireAt 距今 <= LOOKAHEAD_MS 就为其登记一个精确 setTimeout
- *   - setTimeout 到点前 PREHEAT_MS 内先 preheat(建连/热身), 到点用预构建请求 fire
- *   - 立即执行(fireAt=null 或已过去)直接跑
- *   - 用 scheduled 集合防重复登记
+ * 绮惧害瀹炵幇瑕佺偣:
+ *   - tick 姣?5s 鎵弿 pending 浠诲姟, 鍙戠幇 fireAt 璺濅粖 <= LOOKAHEAD_MS 灏变负鍏剁櫥璁颁竴涓簿纭?setTimeout
+ *   - setTimeout 鍒扮偣鍓?PREHEAT_MS 鍐呭厛 preheat(寤鸿繛/鐑韩), 鍒扮偣鐢ㄩ鏋勫缓璇锋眰 fire
+ *   - 绔嬪嵆鎵ц(fireAt=null 鎴栧凡杩囧幓)鐩存帴璺?
+ *   - 鐢?scheduled 闆嗗悎闃查噸澶嶇櫥璁?
  */
 import { listJobs, updateJob } from "./jobStore.js";
 import { getVenue } from "./venueRegistry.js";
 import { getCredential } from "./credentialStore.js";
+import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
+import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 
-const TICK_MS = 5 * 1000;             // 主循环: 5 秒扫一次
-const LOOKAHEAD_MS = 60 * 1000;       // 距 fireAt <= 60s 时登记精确定时
-const PREHEAT_MS = 15 * 1000;         // 提前 15s 开始预热
+const TICK_MS = 5 * 1000;             // 涓诲惊鐜? 5 绉掓壂涓€娆?
+const LOOKAHEAD_MS = 60 * 1000;       // 璺?fireAt <= 60s 鏃剁櫥璁扮簿纭畾鏃?
+const PREHEAT_MS = 15 * 1000;         // 鎻愬墠 15s 寮€濮嬮鐑?
 
 export const readyCache = new Map();
 let lastHourlyCheck = 0;
 const lastMinuteCheck = new Map();
-const scheduled = new Set();          // 已登记精确定时的 jobId
+const scheduled = new Set();          // 宸茬櫥璁扮簿纭畾鏃剁殑 jobId
 
 let timer = null;
 
 export function startScheduler() {
   if (timer) return;
-  console.log("[scheduler] 启动, tick=%ds, lookahead=%ds, preheat=%ds",
+  console.log("[scheduler] 鍚姩, tick=%ds, lookahead=%ds, preheat=%ds",
     TICK_MS / 1000, LOOKAHEAD_MS / 1000, PREHEAT_MS / 1000);
   timer = setInterval(tick, TICK_MS);
   tick();
@@ -46,7 +48,7 @@ async function tick() {
     if (job.status !== "pending") continue;
     const fire = job.fireAt ? new Date(job.fireAt).getTime() : 0;
 
-    // 立即执行 (fireAt 未设或已过很久)
+    // 绔嬪嵆鎵ц (fireAt 鏈鎴栧凡杩囧緢涔?
     if (!job.fireAt || fire <= now) {
       if (!scheduled.has(job.id)) {
         scheduled.add(job.id);
@@ -55,7 +57,7 @@ async function tick() {
       continue;
     }
 
-    // 距开抢 <= LOOKAHEAD_MS: 登记精确定时
+    // 璺濆紑鎶?<= LOOKAHEAD_MS: 鐧昏绮剧‘瀹氭椂
     const diff = fire - now;
     if (diff <= LOOKAHEAD_MS && !scheduled.has(job.id)) {
       scheduled.add(job.id);
@@ -63,13 +65,13 @@ async function tick() {
     }
   }
 
-  // 每小时 ready 心跳
+  // 姣忓皬鏃?ready 蹇冭烦
   if (now - lastHourlyCheck >= 60 * 60 * 1000) {
     lastHourlyCheck = now;
     doReadyCheckAll("hourly");
   }
 
-  // 临近开抢(10分钟)每分钟检测
+  // 涓磋繎寮€鎶?10鍒嗛挓)姣忓垎閽熸娴?
   const soonVenues = new Set();
   for (const job of jobs) {
     if (job.status !== "pending" || !job.fireAt) continue;
@@ -87,7 +89,7 @@ async function tick() {
 }
 
 /**
- * 精确定时: 提前预热 -> 到 fireAt 毫秒发射
+ * 绮剧‘瀹氭椂: 鎻愬墠棰勭儹 -> 鍒?fireAt 姣鍙戝皠
  */
 function schedulePreciseFire(job, fireAtMs) {
   const now = Date.now();
@@ -96,12 +98,12 @@ function schedulePreciseFire(job, fireAtMs) {
 
   const venue = getVenue(job.venueId);
   if (!venue) {
-    updateJob(job.id, { status: "failed", result: { message: "未知球场: " + job.venueId } });
+    updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
     return;
   }
   const cred = getCredential(job.venueId);
 
-  // 预热
+  // 棰勭儹
   setTimeout(async () => {
     try {
       if (typeof venue.preheat === "function") {
@@ -113,30 +115,30 @@ function schedulePreciseFire(job, fireAtMs) {
     }
   }, untilPreheat);
 
-  // 精确发射
+  // 绮剧‘鍙戝皠
   setTimeout(() => {
     runGrab(job, cred, venue).catch((e) => console.error("[grab] error", e));
   }, untilFire);
 
   const fireIso = new Date(fireAtMs).toISOString();
-  console.log(`[schedule] job ${job.id} 已登记精确定时, fireAt=${fireIso}, preheatIn=${untilPreheat}ms, fireIn=${untilFire}ms`);
+  console.log(`[schedule] job ${job.id} 宸茬櫥璁扮簿纭畾鏃? fireAt=${fireIso}, preheatIn=${untilPreheat}ms, fireIn=${untilFire}ms`);
 }
 
 /**
- * 执行抢购. 优先走 buildGrabRequest + fireGrab (预构建, 高精度); 兼容 grab().
+ * 鎵ц鎶㈣喘. 浼樺厛璧?buildGrabRequest + fireGrab (棰勬瀯寤? 楂樼簿搴?; 鍏煎 grab().
  */
 async function runGrab(job, credArg, venueArg) {
   updateJob(job.id, { status: "running" });
   const venue = venueArg || getVenue(job.venueId);
   if (!venue) {
-    updateJob(job.id, { status: "failed", result: { message: "未知球场: " + job.venueId } });
+    updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
     return;
   }
   const cred = credArg || getCredential(job.venueId);
-  const MAX_RETRY = (job.target.ext && job.target.ext.maxRetry) || 20;
-  const INTERVAL = (job.target.ext && job.target.ext.retryInterval) || 200;
+  let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
+  const MAX_RETRY = Math.min(10, Number((job.target.ext && job.target.ext.maxRetry) || profile.booking.maxRetry));
 
-  // 首发前再预构建一次(耗时 <1ms), 保证凭证是最新的
+  // 棣栧彂鍓嶅啀棰勬瀯寤轰竴娆?鑰楁椂 <1ms), 淇濊瘉鍑瘉鏄渶鏂扮殑
   let prebuilt = null;
   if (typeof venue.buildGrabRequest === "function") {
     try { prebuilt = venue.buildGrabRequest(job.target, cred); } catch {}
@@ -146,28 +148,54 @@ async function runGrab(job, credArg, venueArg) {
   const t0 = Date.now();
   for (let i = 1; i <= MAX_RETRY; i++) {
     try {
-      if (prebuilt && typeof venue.fireGrab === "function") {
-        result = await venue.fireGrab(prebuilt);
-      } else {
-        result = await venue.grab(job.target, cred);
-      }
+      result = await enqueueBooking(job.venueId, venue.riskProfile || {}, async () => {
+        if (prebuilt && typeof venue.fireGrab === "function") return venue.fireGrab(prebuilt);
+        return venue.grab(job.target, cred);
+      });
+      profile = recordRiskEvent(job.venueId, result.success ? "success" : isRateLimited(result) ? "rate-limited" : "request", venue.riskProfile || {});
       if (result.success) break;
     } catch (e) {
       result = { success: false, message: String(e) };
+      recordRiskEvent(job.venueId, "request", venue.riskProfile || {});
     }
-    if (i < MAX_RETRY) await new Promise((r) => setTimeout(r, INTERVAL));
+    if (i < MAX_RETRY && isRetryable(result)) {
+      const delay = retryDelay(profile, i);
+      if (isRateLimited(result)) applyCooldown(job.venueId, profile.booking.cooldownMs);
+      console.warn("[grab] retry "+(i + 1)+"/"+MAX_RETRY+" in "+delay+"ms: "+result.message);
+      await new Promise((r) => setTimeout(r, delay));
+    } else if (i < MAX_RETRY) {
+      break;
+    }
   }
   const elapsed = Date.now() - t0;
   updateJob(job.id, {
     status: result && result.success ? "done" : "failed",
     result: { ...result, elapsedMs: elapsed },
   });
-  console.log(`[grab] job ${job.id} -> ${result && result.success ? "成功" : "失败"} (${elapsed}ms): ${result && result.message}`);
+  console.log(`[grab] job ${job.id} -> ${result && result.success ? "鎴愬姛" : "澶辫触"} (${elapsed}ms): ${result && result.message}`);
+}
+
+function isRateLimited(result) {
+  const text = JSON.stringify(result || {}).toLowerCase();
+  return text.includes("操作太频繁") || text.includes("操作頻繁") || text.includes("too frequent") || text.includes("429");
+}
+
+function isRetryable(result) {
+  if (!result || result.success) return false;
+  if (isRateLimited(result)) return true;
+  const text = String(result.message || result).toLowerCase();
+  return text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("503") || text.includes("502");
+}
+
+function retryDelay(profile, attempt) {
+  const configured = profile.booking.backoff && profile.booking.backoff[attempt - 1];
+  if (configured) return configured + Math.floor(Math.random() * Math.max(250, profile.booking.jitterMs));
+  return Math.min(60000, 3000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * Math.max(250, profile.booking.jitterMs));
 }
 
 export async function doReadyCheck(venueId, reason = "manual") {
   const venue = getVenue(venueId);
-  if (!venue) return { ok: false, detail: "未知球场" };
+  if (!venue) return { ok: false, detail: "鏈煡鐞冨満" };
   const cred = getCredential(venueId);
   let res;
   try {
@@ -187,3 +215,5 @@ export async function doReadyCheckAll(reason) {
     await doReadyCheck(venueId, reason);
   }
 }
+
+

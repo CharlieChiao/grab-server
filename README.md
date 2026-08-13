@@ -11,35 +11,6 @@ node server.js          # 默认端口 3000, 可用 PORT=8080 node server.js
 
 启动后访问 `http://localhost:3000/` 查看接口列表。
 
-### 后台运行 (脚本方式)
-
-仓库自带 `restart.sh`（PM2 薄壳）：
-
-```bash
-./restart.sh            # 重启
-./restart.sh start      # 启动
-./restart.sh stop       # 停止
-./restart.sh status     # 状态 + 最近日志
-./restart.sh logs       # 跟随日志
-```
-
-### 作为服务托管 (开机自启 / 崩溃自动重启, 推荐生产)
-
-使用 PM2 + systemd (`pm2-root.service`) 组合：
-
-```bash
-sudo ./deploy/install-pm2.sh        # 首次安装: 启动 grab-court + 生成 pm2-root.service + pm2 save
-pm2 list                            # 查看进程
-pm2 restart grab-court              # 重启
-pm2 stop grab-court                 # 停止
-pm2 logs grab-court                 # 跟随日志
-pm2 save                            # 每次改完 pm2 状态后固化, 供下次开机恢复
-systemctl status pm2-root           # 查看 PM2 守护进程本身
-```
-
-- 应用日志追加到项目根目录的 `server.out.log` / `server.err.log`（由 `ecosystem.config.cjs` 指定）
-- 开机时机制：`pm2-root.service` 启动 → PM2 恢复 `pm2 save` 快照 → grab-court 自动拉起
-
 ## HTTP 接口
 
 | 方法 | 路径 | 说明 |
@@ -129,3 +100,24 @@ data/credentials.json          凭证(不入git)
 - 反向代理(nginx)对外，加简单鉴权(避免接口裸奔)。
 - `data/credentials.json` 权限收紧，勿入库。
 - 服务器建议选在**国内、离银豹服务器网络较近**的机房，降低抢单延迟。
+
+## 快速更新 PSPLVISITORID
+
+当微信小程序中的 PSPLVISITORID 失效时：
+
+1. 在电脑上打开微信小程序，抓取请求头中的 PSPLVISITORID。
+2. 复制完整请求头，或只复制 PSPLVISITORID 的值。
+3. 在 PowerShell 中设置服务器令牌：
+
+    $env:CREDENTIAL_UPDATE_TOKEN = "部署时生成的固定令牌"
+
+4. 运行上传脚本：
+
+    ./tools/update-credential.ps1
+
+脚本默认读取剪贴板，并发送到 picklepop。也可以直接传值：
+
+    ./tools/update-credential.ps1 -Value "PSPLVISITORID的值"
+
+上传接口会先保存凭证，再执行一次 ready 验证；输出 ready=True 才表示当前凭证有效。令牌只在首次部署或主动轮换时生成，不需要每次重新生成。不要把令牌提交到 Git 或发送给其他人。
+

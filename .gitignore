@@ -2,3 +2,8 @@ node_modules/
 data/credentials.json
 config/jobs.json
 *.log
+
+.credential-update-token
+.__deploy_tmp/
+deploy/backup-*/
+config/risk-profiles.json
