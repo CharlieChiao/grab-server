@@ -10,9 +10,30 @@ import express from "express";
 import { listVenues, getVenue } from "../core/venueRegistry.js";
 import { doReadyCheck, readyCache } from "../core/scheduler.js";
 import { getCredential, setCredential } from "../core/credentialStore.js";
+import { db, nowIso } from "../core/database.js";
 
 const router = express.Router();
 
+router.post("/account/claim-legacy", (req, res) => {
+  const userId = req.user.id;
+  const { db, nowIso } = require("../core/database.js");
+  const legacy = db.prepare("SELECT COUNT(*) AS n FROM credentials WHERE user_id='legacy-owner'").get().n;
+  const already = db.prepare("SELECT 1 FROM users WHERE id=? AND openid_hash=?").get(userId, userId);
+  if (!legacy) return res.json({ ok: true, claimed: false });
+  if (already && db.prepare("SELECT 1 FROM credentials WHERE user_id=?").get(userId)) return res.json({ ok: true, claimed: false });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE credentials SET user_id=? WHERE user_id='legacy-owner'").run(userId);
+    db.prepare("UPDATE jobs SET user_id=? WHERE user_id='legacy-owner'").run(userId);
+    db.prepare("DELETE FROM users WHERE id='legacy-owner'").run();
+    db.prepare("INSERT OR IGNORE INTO users(id, openid_hash, created_at, last_seen_at) VALUES(?, ?, ?, ?)").run(userId, userId, nowIso(), nowIso());
+    db.exec("COMMIT");
+    return res.json({ ok: true, claimed: true });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    return res.status(500).json({ error: "旧数据认领失败" });
+  }
+});
 router.get("/venues", (req, res) => {
   res.json({ ok: true, venues: listVenues() });
 });
@@ -27,7 +48,7 @@ router.get("/venues/:id", (req, res) => {
 router.get("/ready/:venueId", async (req, res) => {
   const v = getVenue(req.params.venueId);
   if (!v) return res.status(404).json({ error: "鏈煡鐞冨満" });
-  const result = await doReadyCheck(req.params.venueId, "api");
+  const result = await doReadyCheck(req.params.venueId, "api", req.user.id);
   res.json({ ok: true, venueId: req.params.venueId, ...result });
 });
 
@@ -49,7 +70,7 @@ function extractVisitorId(input) {
 
 function credentialUpdateAllowed(req) {
   const expected = process.env.CREDENTIAL_UPDATE_TOKEN;
-  return !expected || req.get("x-credential-update-token") === expected;
+  return !!expected && req.get("x-credential-update-token") === expected;
 }
 
 router.post("/credentials/:venueId/ingest", async (req, res) => {
@@ -61,25 +82,29 @@ router.post("/credentials/:venueId/ingest", async (req, res) => {
   const visitorId = extractVisitorId(input);
   if (!visitorId) return res.status(400).json({ error: "未找到有效的 PSPLVISITORID" });
 
-  setCredential(req.params.venueId, { PSPLVISITORID: visitorId });
+  setCredential(req.params.venueId, { PSPLVISITORID: visitorId }, req.user.id);
   let ready = null;
-  try { ready = await doReadyCheck(req.params.venueId, "credential-ingest"); } catch {}
+  try { ready = await doReadyCheck(req.params.venueId, "credential-ingest", req.user.id); } catch {}
   res.json({ ok: true, saved: true, configured: true, ready: ready ? !!ready.ok : null });
 });
 router.put("/credentials/:venueId", (req, res) => {
   const v = getVenue(req.params.venueId);
   if (!v) return res.status(404).json({ error: "鏈煡鐞冨満" });
   const cred = req.body || {};
-  setCredential(req.params.venueId, cred);
+  setCredential(req.params.venueId, cred, req.user.id);
   res.json({ ok: true, saved: true });
 });
 
 router.get("/credentials/:venueId", (req, res) => {
-  const cred = getCredential(req.params.venueId);
+  const cred = getCredential(req.params.venueId, req.user.id);
   // 鑴辨晱: 鍙繑鍥炴槸鍚﹂厤缃?
   res.json({ ok: true, configured: !!cred, keys: cred ? Object.keys(cred) : [] });
 });
 
 export default router;
+
+
+
+
 
 

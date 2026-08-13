@@ -83,7 +83,7 @@ async function tick() {
     const last = lastMinuteCheck.get(venueId) || 0;
     if (now - last >= 60 * 1000) {
       lastMinuteCheck.set(venueId, now);
-      doReadyCheck(venueId, "pre-grab-1min");
+      doReadyCheck(venueId, "pre-grab-1min", jobs.find((j) => j.venueId === venueId && j.status === "pending")?.userId || "legacy-owner");
     }
   }
 }
@@ -101,7 +101,7 @@ function schedulePreciseFire(job, fireAtMs) {
     updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
     return;
   }
-  const cred = getCredential(job.venueId);
+  const cred = getCredential(job.venueId, job.userId);
 
   // 棰勭儹
   setTimeout(async () => {
@@ -134,7 +134,7 @@ async function runGrab(job, credArg, venueArg) {
     updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
     return;
   }
-  const cred = credArg || getCredential(job.venueId);
+  const cred = credArg || getCredential(job.venueId, job.userId);
   let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
   const MAX_RETRY = Math.min(10, Number((job.target.ext && job.target.ext.maxRetry) || profile.booking.maxRetry));
 
@@ -193,10 +193,10 @@ function retryDelay(profile, attempt) {
   return Math.min(60000, 3000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * Math.max(250, profile.booking.jitterMs));
 }
 
-export async function doReadyCheck(venueId, reason = "manual") {
+export async function doReadyCheck(venueId, reason = "manual", userId = "legacy-owner") {
   const venue = getVenue(venueId);
   if (!venue) return { ok: false, detail: "鏈煡鐞冨満" };
-  const cred = getCredential(venueId);
+  const cred = getCredential(venueId, userId);
   let res;
   try {
     res = await venue.ready(cred);
@@ -212,8 +212,11 @@ export async function doReadyCheckAll(reason) {
   const jobs = listJobs();
   const venueIds = new Set(jobs.map((j) => j.venueId));
   for (const venueId of venueIds) {
-    await doReadyCheck(venueId, reason);
+    const userIds = new Set(jobs.filter((j) => j.venueId === venueId).map((j) => j.userId || "legacy-owner"));
+    for (const userId of userIds) await doReadyCheck(venueId, reason, userId);
   }
 }
+
+
 
 

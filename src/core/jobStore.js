@@ -1,79 +1,13 @@
-/**
- * 定时任务持久化 (JSON 文件)。
- * 任务结构:
- * {
- *   id, venueId, target:{court,date,time,cost,ext},
- *   fireAt: ISO时间(开抢时刻),
- *   status: 'pending'|'running'|'done'|'failed'|'canceled',
- *   result, createdAt, updatedAt
- * }
- */
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { db, nowIso } from "./database.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FILE = path.join(__dirname, "..", "..", "config", "jobs.json");
-
-function ensure() {
-  const dir = path.dirname(FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(FILE)) fs.writeFileSync(FILE, "[]", "utf8");
+function rowToJob(row) {
+  if (!row) return null;
+  return { id: row.id, userId: row.user_id, venueId: row.venue_id, target: JSON.parse(row.target_json), fireAt: row.fire_at, status: row.status, result: row.result_json ? JSON.parse(row.result_json) : null, createdAt: row.created_at, updatedAt: row.updated_at };
 }
-
-function readAll() {
-  ensure();
-  try {
-    return JSON.parse(fs.readFileSync(FILE, "utf8"));
-  } catch {
-    return [];
-  }
-}
-
-function writeAll(list) {
-  ensure();
-  fs.writeFileSync(FILE, JSON.stringify(list, null, 2), "utf8");
-}
-
-export function listJobs() {
-  return readAll();
-}
-
-export function getJob(id) {
-  return readAll().find((j) => j.id === id);
-}
-
-export function createJob({ venueId, target, fireAt }) {
-  const list = readAll();
-  const now = new Date().toISOString();
-  const job = {
-    id: crypto.randomUUID(),
-    venueId,
-    target,
-    fireAt: fireAt || null, // null = 立即执行
-    status: "pending",
-    result: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  list.push(job);
-  writeAll(list);
-  return job;
-}
-
-export function updateJob(id, patch) {
-  const list = readAll();
-  const idx = list.findIndex((j) => j.id === id);
-  if (idx < 0) return null;
-  list[idx] = { ...list[idx], ...patch, updatedAt: new Date().toISOString() };
-  writeAll(list);
-  return list[idx];
-}
-
-export function deleteJob(id) {
-  const list = readAll();
-  const next = list.filter((j) => j.id !== id);
-  writeAll(next);
-  return next.length !== list.length;
-}
+export function listJobs() { return db.prepare("SELECT * FROM jobs ORDER BY created_at").all().map(rowToJob); }
+export function listJobsForUser(userId) { return db.prepare("SELECT * FROM jobs WHERE user_id=? ORDER BY created_at").all(userId).map(rowToJob); }
+export function getJob(id, userId) { return rowToJob(db.prepare("SELECT * FROM jobs WHERE id=? AND user_id=?").get(id, userId)); }
+export function createJob({ userId, venueId, target, fireAt }) { const id = crypto.randomUUID(), now = nowIso(); db.prepare("INSERT OR IGNORE INTO users(id, created_at, last_seen_at) VALUES(?, ?, ?)").run(userId, now, now); db.prepare("INSERT INTO jobs(id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)").run(id,userId,venueId,JSON.stringify(target),fireAt || null,"pending",null,now,now); return getJob(id, userId); }
+export function updateJob(id, patch) { const row = db.prepare("SELECT * FROM jobs WHERE id=?").get(id); if (!row) return null; const next = { ...rowToJob(row), ...patch, updatedAt: nowIso() }; db.prepare("UPDATE jobs SET status=?, result_json=?, updated_at=? WHERE id=?").run(next.status, next.result ? JSON.stringify(next.result) : null, next.updatedAt, id); return next; }
+export function deleteJob(id, userId) { return db.prepare("DELETE FROM jobs WHERE id=? AND user_id=?").run(id, userId).changes > 0; }
