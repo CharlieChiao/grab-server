@@ -8,6 +8,7 @@ import { startScheduler } from "./src/core/scheduler.js";
 import jobsApi from "./src/api/jobs.js";
 import readyApi from "./src/api/ready.js";
 import { requireUser } from "./src/core/auth.js";
+import authApi from "./src/api/auth.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -19,6 +20,7 @@ async function main() {
   await loadVenues();
 
   // 璺敱
+  app.use("/api/auth", authApi);
   app.use("/api", (req, res, next) => {
     if (req.path === "/venues" || req.path.startsWith("/venues/")) return next();
     return requireUser(req, res, next);
@@ -59,5 +61,6 @@ main().catch((e) => {
   console.error("鍚姩澶辫触:", e);
   process.exit(1);
 });
+
 
 
