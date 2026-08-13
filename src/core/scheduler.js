@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 璋冨害鍣?(楂樼簿搴︽姠璐増):
  *  1) 绮剧‘寮€鎶? 鍒?job.fireAt 鏃跺埢姣绾у彂灏? 鎻愬墠 preheat 棰勭儹闀胯繛鎺?
  *  2) ready 蹇冭烦: 姣忓皬鏃跺鏈変换鍔＄殑鐞冨満鍋氫竴娆?ready 妫€娴?
@@ -127,6 +127,21 @@ function schedulePreciseFire(job, fireAtMs) {
 /**
  * 鎵ц鎶㈣喘. 浼樺厛璧?buildGrabRequest + fireGrab (棰勬瀯寤? 楂樼簿搴?; 鍏煎 grab().
  */
+function targetItems(target) {
+  if (Array.isArray(target.courts) && target.courts.length) {
+    return target.courts.map((item) => typeof item === "string" ? { court: item, time: target.time } : { court: item.court, time: item.time || target.time });
+  }
+  return [{ court: target.court, time: target.time }];
+}
+
+async function targetIsReleased(venue, target, cred) {
+  if (typeof venue.listSlots !== "function") return true;
+  const ids = new Map((venue.meta.courts || []).map((court) => [court.name, String(court.uid)]));
+  const slots = await venue.listSlots({ date: target.date }, cred);
+  const present = new Set((slots || []).map((slot) => `${String(slot.uid)}|${String(slot.begin || "").slice(11, 16)}`));
+  const items = targetItems(target);
+  return items.length > 0 && items.every((item) => present.has(`${ids.get(item.court) || item.court}|${item.time}`));
+}
 async function runGrab(job, credArg, venueArg) {
   updateJob(job.id, { status: "running" });
   const venue = venueArg || getVenue(job.venueId);
@@ -135,6 +150,19 @@ async function runGrab(job, credArg, venueArg) {
     return;
   }
   const cred = credArg || getCredential(job.venueId, job.userId);
+  if (job.fireAt) {
+    try {
+      if (!(await targetIsReleased(venue, job.target, cred))) {
+        const retryAt = new Date(Date.now() + 60 * 1000).toISOString();
+        updateJob(job.id, { status: "pending", fireAt: retryAt, result: { message: "尚未放场，继续等待", retryAt } });
+        scheduled.delete(job.id);
+        console.log(`[grab] job ${job.id} 尚未放场，延后至 ${retryAt}`);
+        return;
+      }
+    } catch (error) {
+      console.warn(`[grab] job ${job.id} 放场检测异常，按原计划继续: ${error.message || error}`);
+    }
+  }
   let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
   const MAX_RETRY = Math.min(10, Number((job.target.ext && job.target.ext.maxRetry) || profile.booking.maxRetry));
 
