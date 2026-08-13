@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import { listVenues, getVenue } from "../core/venueRegistry.js";
 import { doReadyCheck, readyCache } from "../core/scheduler.js";
 import { getCredential, setCredential } from "../core/credentialStore.js";
@@ -47,7 +47,7 @@ router.get("/ready/:venueId", async (req, res) => {
   const venue = getVenue(req.params.venueId);
   if (!venue) return res.status(404).json({ error: "unknown venue" });
   const result = await doReadyCheck(req.params.venueId, "api", req.user.id);
-  res.json({ ok: true, venueId: req.params.venueId, ...result });
+  res.json({ ...result, ok: result.ok === true, venueId: req.params.venueId });
 });
 router.get("/ready/:venueId/cache", (req, res) => res.json({ ok: true, cached: readyCache.get(req.params.venueId) || null }));
 
