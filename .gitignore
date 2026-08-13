@@ -7,3 +7,6 @@ config/jobs.json
 .__deploy_tmp/
 deploy/backup-*/
 config/risk-profiles.json
+
+.runtime.env
+data/grab.sqlite*
