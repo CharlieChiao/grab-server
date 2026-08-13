@@ -47,21 +47,22 @@ router.get("/venues/:id/reference-price", async (req, res) => {
   if (!date || !courtUids.length || !times.length) return res.status(400).json({ error: "date, courtUids and times are required" });
   if (typeof venue.listSlots !== "function") return res.status(501).json({ error: "venue slot pricing is not supported" });
   const previousWeek = (value) => {
-    const d = new Date(`${value}T00:00:00+08:00`);
-    d.setUTCDate(d.getUTCDate() - 7);
+    const [year, month, day] = value.split("-").map(Number);
+    const d = new Date(Date.UTC(year, month - 1, day - 7));
     return d.toISOString().slice(0, 10);
   };
   const summarize = (slots, sourceDate) => {
     const map = new Map((slots || []).map((slot) => [`${slot.uid}|${String(slot.begin || "").slice(11, 16)}`, Number(slot.cost) || 0]));
     const prices = [];
     for (const uid of courtUids) for (const time of times) prices.push(map.get(`${uid}|${time}`) || 0);
-    return { sourceDate, released: (slots || []).length > 0, complete: prices.length > 0 && prices.every((price) => price > 0), total: prices.reduce((sum, price) => sum + price, 0) };
+    const selectedCourtReleased = (slots || []).some((slot) => courtUids.includes(String(slot.uid)));
+    return { sourceDate, released: (slots || []).length > 0, selectedCourtReleased, complete: prices.length > 0 && prices.every((price) => price > 0), total: prices.reduce((sum, price) => sum + price, 0) };
   };
   try {
     const cred = getCredential(req.params.id, req.user.id);
     const todaySlots = await venue.listSlots({ date }, cred);
     const today = summarize(todaySlots, date);
-    if (today.released) return res.json({ ok: true, ...today, fallback: false });
+    if (today.selectedCourtReleased) return res.json({ ok: true, ...today, fallback: false });
     const historicDate = previousWeek(date);
     const historic = summarize(await venue.listSlots({ date: historicDate }, cred), historicDate);
     res.json({ ok: true, ...historic, fallback: true });
