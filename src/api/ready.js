@@ -38,7 +38,19 @@ router.post("/devices/pair", (req, res) => {
   res.json({ ok: true, message: "电脑配对成功", deviceId: payload.deviceId });
 });
 router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues() }));
-router.get("/venues/:id", (req, res) => {
+router.get("/venues/:id/slots", async (req, res) => {
+  const venue = getVenue(req.params.id);
+  const date = String(req.query.date || "").trim();
+  if (!venue) return res.status(404).json({ error: "not found" });
+  if (!date) return res.status(400).json({ error: "date is required" });
+  if (typeof venue.listSlots !== "function") return res.status(501).json({ error: "venue slot pricing is not supported" });
+  try {
+    const slots = await venue.listSlots({ date }, getCredential(req.params.id, req.user.id));
+    res.json({ ok: true, venueId: req.params.id, date, released: slots.length > 0, slots });
+  } catch (error) {
+    res.status(502).json({ error: "查询场地价格失败", detail: String(error.message || error) });
+  }
+});router.get("/venues/:id", (req, res) => {
   const venue = getVenue(req.params.id);
   if (!venue) return res.status(404).json({ error: "not found" });
   res.json({ ok: true, meta: venue.meta });

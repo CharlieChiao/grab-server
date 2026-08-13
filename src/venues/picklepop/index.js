@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PICKLE POP 鐞冨満閫傞厤鍣?(閾惰惫 Pospal 鍚庣)
  * 瀹炵幇缁熶竴鎺ュ彛: meta / ready / grab / listSlots (+ 鍙€?preheat / buildGrabRequest)
  *
@@ -153,7 +153,10 @@ export async function preheat(cred) {
  */
 export function buildGrabRequest(target, cred) {
   const items = normalizeItems(target);
-  const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
+  const explicitTotal = Number(target.ext && target.ext.totalCost);
+  const totalCost = Number.isFinite(explicitTotal) && explicitTotal > 0
+    ? explicitTotal
+    : items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
   const payMethod = (target.ext && target.ext.payMethod) || B.payMethodBalance;
   const payload = {
     userId: B.storeId,
