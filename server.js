@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 鐞冨満鎶㈣骞冲彴 - 涓诲悗绔叆鍙?
  * 鍚姩: node server.js  (绔彛榛樿 3000, 鍙敤 PORT 鐜鍙橀噺)
  */
@@ -22,7 +22,7 @@ async function main() {
   // 璺敱
   app.use("/api/auth", authApi);
   app.use("/api", (req, res, next) => {
-    if (req.path === "/venues" || req.path.startsWith("/venues/")) return next();
+    if (req.path === "/venues" || /^\/venues\/[^/]+$/.test(req.path)) return next();
     return requireUser(req, res, next);
   });
   app.use("/api/jobs", jobsApi);
