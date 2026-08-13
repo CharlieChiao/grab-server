@@ -38,6 +38,37 @@ router.post("/devices/pair", (req, res) => {
   res.json({ ok: true, message: "电脑配对成功", deviceId: payload.deviceId });
 });
 router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues() }));
+router.get("/venues/:id/reference-price", async (req, res) => {
+  const venue = getVenue(req.params.id);
+  const date = String(req.query.date || "").trim();
+  const courtUids = String(req.query.courtUids || "").split(",").map((v) => v.trim()).filter(Boolean);
+  const times = String(req.query.times || "").split(",").map((v) => v.trim()).filter(Boolean);
+  if (!venue) return res.status(404).json({ error: "not found" });
+  if (!date || !courtUids.length || !times.length) return res.status(400).json({ error: "date, courtUids and times are required" });
+  if (typeof venue.listSlots !== "function") return res.status(501).json({ error: "venue slot pricing is not supported" });
+  const previousWeek = (value) => {
+    const d = new Date(`${value}T00:00:00+08:00`);
+    d.setUTCDate(d.getUTCDate() - 7);
+    return d.toISOString().slice(0, 10);
+  };
+  const summarize = (slots, sourceDate) => {
+    const map = new Map((slots || []).map((slot) => [`${slot.uid}|${String(slot.begin || "").slice(11, 16)}`, Number(slot.cost) || 0]));
+    const prices = [];
+    for (const uid of courtUids) for (const time of times) prices.push(map.get(`${uid}|${time}`) || 0);
+    return { sourceDate, released: (slots || []).length > 0, complete: prices.length > 0 && prices.every((price) => price > 0), total: prices.reduce((sum, price) => sum + price, 0) };
+  };
+  try {
+    const cred = getCredential(req.params.id, req.user.id);
+    const todaySlots = await venue.listSlots({ date }, cred);
+    const today = summarize(todaySlots, date);
+    if (today.released) return res.json({ ok: true, ...today, fallback: false });
+    const historicDate = previousWeek(date);
+    const historic = summarize(await venue.listSlots({ date: historicDate }, cred), historicDate);
+    res.json({ ok: true, ...historic, fallback: true });
+  } catch (error) {
+    res.status(502).json({ error: "查询参考价格失败", detail: String(error.message || error) });
+  }
+});
 router.get("/venues/:id/slots", async (req, res) => {
   const venue = getVenue(req.params.id);
   const date = String(req.query.date || "").trim();
