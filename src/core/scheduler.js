@@ -66,15 +66,22 @@ async function runGrab(job, credentialArg, venueArg) {
           return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
         });
       } catch (e) { result = { success: false, message: String(e.message || e) }; }
-      const classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
+      let classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
+      const retryPolicy = venue.meta?.raw?.releaseRetry || {};
+      const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
+      const releaseWindowMs = Number(retryPolicy.unavailableGraceMs || 0);
+      const unavailableText = String(result?.message || "");
+      if (classification === "terminal" && releaseWindowMs > 0 && releaseElapsedMs <= releaseWindowMs && /\u4e0d\u53ef\u7ea6|\u65e0\u6548\u65f6\u6bb5/.test(unavailableText)) classification = "release-pending";
       recordAttempt(job, attempt, dispatchedMs || Date.now(), classification, dispatchedMs ? Date.now() - dispatchedMs : 0, result?.message);
       profile = recordRiskEvent(job.venueId, classification === "success" ? "success" : classification === "rate-limited" ? "rate-limited" : "request", adapterProfile);
       if (classification === "success") break;
-      if (!["not-released", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts) break;
+      if (!["not-released", "release-pending", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts) break;
+      if (classification === "release-pending" && releaseElapsedMs >= releaseWindowMs) break;
       const delay = linearRetryDelay(profile, classification);
       if (classification === "rate-limited") applyCooldown(scopeKey, delay);
-      console.warn(`[grab] job=${job.id} retry=${attempt + 1}/${maxAttempts} class=${classification} delayMs=${delay}`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      console.warn("[grab] job=" + job.id + " retry=" + (attempt + 1) + "/" + maxAttempts + " class=" + classification + " delayMs=" + delay);
+      // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
+      if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
     updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
   } finally { scheduled.delete(job.id); }
@@ -90,7 +97,7 @@ export function classifyResult(result) {
 }
 export function linearRetryDelay(profile, classification) {
   const b = profile.booking || {};
-  const base = classification === "not-released" ? Number(b.notReleasedIntervalMs || b.minIntervalMs || 3000) : classification === "transient" ? Number(b.transientIntervalMs || b.minIntervalMs || 3000) : Number(b.cooldownMs || 10000);
+  const base = (classification === "not-released" || classification === "release-pending") ? Number(b.notReleasedIntervalMs || b.minIntervalMs || 3000) : classification === "transient" ? Number(b.transientIntervalMs || b.minIntervalMs || 3000) : Number(b.cooldownMs || 10000);
   return base + Math.floor(Math.random() * (Number(b.jitterMs || 0) + 1));
 }
 function recordAttempt(job, attempt, dispatchedMs, classification, durationMs, message) {
