@@ -27,6 +27,7 @@ bookingHours:
   end: "02:00"
   overnight: true
   slotMinutes: 60
+  slotEndOffsetMinutes: -1
 courts:
   - name: 匹克球1号
     type: pickle

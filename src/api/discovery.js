@@ -54,6 +54,32 @@ function encrypt(payload) {
   return [iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".");
 }
 
+function slotTimingSummary(value) {
+  const records = [];
+  const visit = (node, depth = 0) => {
+    if (!node || depth > 8) return;
+    if (Array.isArray(node)) { for (const item of node.slice(0, 300)) visit(item, depth + 1); return; }
+    if (typeof node !== "object") return;
+    const begin = node.beginDatetime || node.begin || node.startDatetime || node.start;
+    const end = node.endDatetime || node.end || node.finishDatetime || node.finish;
+    if (typeof begin === "string" && typeof end === "string") {
+      const beginMs = Date.parse(begin.replace(" ", "T") + (begin.includes("T") ? "" : "Z"));
+      const endMs = Date.parse(end.replace(" ", "T") + (end.includes("T") ? "" : "Z"));
+      if (Number.isFinite(beginMs) && Number.isFinite(endMs) && endMs >= beginMs) records.push({ beginMs, endMs });
+    }
+    for (const child of Object.values(node).slice(0, 80)) visit(child, depth + 1);
+  };
+  visit(value);
+  if (!records.length) return null;
+  const durations = records.map((item) => Math.round((item.endMs - item.beginMs) / 60000));
+  const starts = [...new Set(records.map((item) => item.beginMs))].sort((a, b) => a - b);
+  const gaps = starts.slice(1).map((value, index) => Math.round((value - starts[index]) / 60000)).filter((value) => value > 0 && value <= 240);
+  const mode = (values) => values.sort((a, b) => values.filter((v) => v === b).length - values.filter((v) => v === a).length)[0];
+  const durationMinutes = mode(durations);
+  const slotMinutes = gaps.length ? mode(gaps) : durationMinutes + 1;
+  return { samples: records.length, slotMinutes, durationMinutes, endOffsetMinutes: durationMinutes - slotMinutes };
+}
+
 function endpointSummary(event) {
   let url;
   try { url = new URL(event.url); } catch { return null; }
@@ -67,6 +93,7 @@ function endpointSummary(event) {
     requestShape: shape(event.requestBody),
     responseShape: shape(event.responseBody),
     statusCode: Number(event.statusCode) || null,
+    slotTiming: slotTimingSummary(event.responseBody),
   };
 }
 
@@ -132,6 +159,7 @@ function compileManifest(session, rows) {
       tags: candidate.annotation?.tags || [],
       note: candidate.annotation?.note || null,
       relevance: candidate.candidate?.score || 0,
+      slotTiming: candidate.endpoint?.slotTiming || null,
     };
   }
   const required = ["account", "courts", "slots", "booking"];

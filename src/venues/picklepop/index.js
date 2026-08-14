@@ -76,6 +76,7 @@ async function post(path_, cred, payload, timeoutMs = 12000) {
 
 const uidByName = Object.fromEntries(cfg.courts.map((c) => [c.name, c.uid]));
 const slotMinutes = Math.max(1, Number((cfg.bookingHours || {}).slotMinutes) || 60);
+const slotEndOffsetMinutes = Number((cfg.bookingHours || {}).slotEndOffsetMinutes) || 0;
 
 function addMinutes(date, time, minutes) {
   const [year, month, day] = String(date).split("-").map(Number);
@@ -220,7 +221,7 @@ function normalizeItems(target) {
     return {
       uid,
       begin: `${date} ${time}:00`,
-      end: addMinutes(date, time, slotMinutes),
+      end: addMinutes(date, time, slotMinutes + slotEndOffsetMinutes),
       cost: cost != null ? cost : 0,
     };
   };
