@@ -211,7 +211,11 @@ async function runGrab(job, credArg, venueArg) {
 
 function isRateLimited(result) {
   const text = JSON.stringify(result || {}).toLowerCase();
-  return text.includes("操作太频繁") || text.includes("操作頻繁") || text.includes("too frequent") || text.includes("429");
+  return text.includes("操作太频繁")
+    || text.includes("操作频繁")
+    || text.includes("too frequent")
+    || text.includes("rate limit")
+    || text.includes("429");
 }
 
 function isRetryable(result) {
