@@ -9,13 +9,14 @@ import jobsApi from "./src/api/jobs.js";
 import readyApi from "./src/api/ready.js";
 import { requireUser, verifyDeviceRequest } from "./src/core/auth.js";
 import authApi from "./src/api/auth.js";
+import profileApi from "./src/api/profile.js";
 import { startRiskCalibrationScheduler } from "./src/core/riskCalibration.js";
 
 const PORT = process.env.PORT || 3000;
 
 async function main() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "2mb" }));
 
   // 鍔犺浇鎵€鏈夌悆鍦洪€傞厤鍣?
   await loadVenues();
@@ -27,6 +28,7 @@ async function main() {
     const deviceUser = verifyDeviceRequest(req); if (deviceUser) { req.user = deviceUser; req.deviceAuthenticated = true; return next(); }
     return requireUser(req, res, next);
   });
+  app.use("/api", profileApi);
   app.use("/api/jobs", jobsApi);
   app.use("/api", readyApi);
 

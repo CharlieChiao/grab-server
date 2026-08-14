@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS venue_catalog (venue_id TEXT NOT NULL, court_id TEXT 
 CREATE INDEX IF NOT EXISTS idx_attempts_job ON job_attempts(job_id, attempt);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
+function ensureUserColumn(name, definition) {
+  const columns = db.prepare("PRAGMA table_info(users)").all();
+  if (!columns.some((column) => column.name === name)) {
+    db.exec(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
+  }
+}
+ensureUserColumn("nickname", "TEXT");
+ensureUserColumn("avatar_mime", "TEXT");
+ensureUserColumn("avatar_data", "BLOB");
+ensureUserColumn("profile_updated_at", "TEXT");
+
 export const nowIso = () => new Date().toISOString();
 if (fs.existsSync(legacyJobsFile) && db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n === 0) {
   try {
