@@ -120,7 +120,7 @@ export const riskProfile = {
  */
 export async function ready(cred) {
   if (!cred || !cred.PSPLVISITORID) {
-    return { ok: false, detail: "缂哄皯 PSPLVISITORID" };
+    return { ok: false, detail: "缺少 PSPLVISITORID" };
   }
   let last = null;
   for (let i = 0; i < 3; i++) {
@@ -133,7 +133,7 @@ export async function ready(cred) {
       if (json && json.isLogin) {
         return {
           ok: true,
-          detail: `宸茬櫥褰? ${json.name || ""} ${json.phone || ""}`,
+          detail: "已登录",
           extra: { balance: json.balance, uid: json.uid },
         };
       }
@@ -142,7 +142,7 @@ export async function ready(cred) {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  return { ok: false, detail: "鐧诲綍鎬佹棤鏁?鍙兘PSPLVISITORID宸茶繃鏈?闇€閲嶆柊鎶撳寘)", extra: last || {} };
+  return { ok: false, detail: "登录状态无效，PSPLVISITORID 可能已过期，需要重新抓取", extra: last || {} };
 }
 
 /**
@@ -150,16 +150,16 @@ export async function ready(cred) {
  * 閫氳繃鍙戜竴涓交閲忕殑鐧诲綍鎬佹煡璇㈣姹傛妸杩炴帴姹犵儹璧锋潵銆?
  */
 export async function preheat(cred) {
-  if (!cred || !cred.PSPLVISITORID) return { ok: false, detail: "缂哄皯 PSPLVISITORID" };
+  if (!cred || !cred.PSPLVISITORID) return { ok: false, detail: "缺少 PSPLVISITORID" };
   try {
     const t0 = Date.now();
     await post("/wxapi/customeraccount/FindLoginInfo", cred, {
       storeId: B.storeId,
       isRefresh: false,
     }, 5000);
-    return { ok: true, detail: `棰勭儹瀹屾垚, 鑰楁椂 ${Date.now() - t0}ms` };
+    return { ok: true, detail: `预热完成，耗时 ${Date.now() - t0}ms` };
   } catch (e) {
-    return { ok: false, detail: "棰勭儹澶辫触: " + String(e) };
+    return { ok: false, detail: "预热失败：" + String(e) };
   }
 }
 
@@ -210,11 +210,11 @@ export function buildGrabRequest(target, cred) {
  */
 function normalizeItems(target) {
   const date = target.date;
-  if (!date) throw new Error("target.date 蹇呭～");
+  if (!date) throw new Error("target.date 必填");
 
   const toItem = (courtName, courtUid, time, cost) => {
     if (!courtName && !courtUid) throw new Error("courts[].court or courts[].courtUid is required");
-    if (!time) throw new Error("time 蹇呭～(椤跺眰鎴栨瘡椤?");
+    if (!time) throw new Error("time 必填（顶层或每一项）");
     const uid = courtUid || uidByName[courtName] || courtName;
     const [h] = String(time).split(":");
     return {
@@ -280,15 +280,15 @@ export function interpretGrabResponse(json) {
       return {
         success: true,
         orderId: res.apptUid,
-        message: "涓嬪崟鎴愬姛浣嗚繑鍥炲井淇℃敮浠樺弬鏁?浣欓鍙兘涓嶈冻), 闇€鎵嬪姩鏀粯",
+        message: "下单成功，但返回微信支付参数，可能需要手动支付",
         raw: json,
       };
     }
-    return { success: true, orderId: res.apptUid, message: "鎶㈠埌骞跺凡浣欓鏀粯", raw: json };
+    return { success: true, orderId: res.apptUid, message: "抢订成功并已使用余额支付", raw: json };
   }
   return {
     success: false,
-    message: (json && (json.message || JSON.stringify(json.messages) || `errorCode=${json.errorCode}`)) || "涓嬪崟澶辫触",
+    message: (json && (json.message || JSON.stringify(json.messages) || `errorCode=${json.errorCode}`)) || "下单失败",
     raw: json,
   };
 }
