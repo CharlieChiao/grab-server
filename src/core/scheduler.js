@@ -180,6 +180,9 @@ async function runGrab(job, credArg, venueArg) {
   for (let i = 1; i <= MAX_RETRY; i++) {
     try {
       result = await enqueueBooking(job.venueId, venue.riskProfile || {}, async () => {
+        const dispatchMs = Date.now();
+        const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
+        console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${i} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchMs - plannedMs}`);
         if (prebuilt && typeof venue.fireGrab === "function") return venue.fireGrab(prebuilt);
         return venue.grab(job.target, cred);
       });

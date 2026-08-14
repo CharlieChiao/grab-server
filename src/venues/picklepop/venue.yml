@@ -11,6 +11,17 @@ backend:
 advanceDays:
   pickle: 7
   tennis: 2
+release:
+  timezone: Asia/Shanghai
+  rules:
+    pickle:
+      mode: calendar-day-batch
+      calendarDaysBefore: 7
+      at: "00:00:00.000"
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 2
+      at: "00:00:00.000"
 bookingHours:
   start: "08:00"
   end: "02:00"

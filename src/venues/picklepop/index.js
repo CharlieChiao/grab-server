@@ -92,6 +92,7 @@ export const meta = {
   logo: cfg.logo,
   desc: cfg.desc,
   advanceDays: cfg.advanceDays,
+  release: cfg.release,
   bookingHours: cfg.bookingHours,
   courts: cfg.courts,
   raw: cfg,
