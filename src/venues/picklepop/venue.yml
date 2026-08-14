@@ -64,7 +64,7 @@ capture:
   hosts:
     - wxservice-stg48.pospal.cn
   paths:
-    - /wxapi/customeraccount/FindLoginInfo
+    - "*"
   discoveryPaths:
     - /wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2
   headers:

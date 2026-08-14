@@ -273,6 +273,7 @@ class CaptureWindow(QMainWindow):
         self.discovery_dialog = None
         self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
         self.discovery_uploads = 0
+        self.traffic_count = 0
         self.build_ui()
         self.connect_signals()
         self.poll_timer = QTimer(self)
@@ -512,6 +513,7 @@ class CaptureWindow(QMainWindow):
         if not capture.get("hosts"):
             QMessageBox.warning(self, "捕获配置缺失", "该球场没有监听域名配置，可以使用“发现新球场”。")
             return
+        self.traffic_count = 0
         self.port = find_free_port()
         self.controller = ProxyController(capture, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
@@ -681,7 +683,13 @@ class CaptureWindow(QMainWindow):
             while True:
                 item = self.events.get_nowait()
                 kind = item.get("kind")
-                if kind == "learning":
+                if kind == "traffic":
+                    self.traffic_count += 1
+                    self.network_label.setText(f"代理流量正常 · 已检测到 {self.traffic_count} 个接口")
+                    self.capture_label.setText("已检测到球场流量，正在等待凭证请求")
+                    if self.traffic_count <= 8:
+                        self.write_log("检测到：" + item.get("host", "") + item.get("path", ""))
+                elif kind == "learning":
                     stage = item.get("stage") or "account"
                     self.discovery_uploads += 1
                     threading.Thread(target=self.upload_learning_event, args=(stage, item.get("event") or {}), daemon=True).start()
@@ -701,6 +709,7 @@ class CaptureWindow(QMainWindow):
         if not value:
             return
         venue_id = self.selected_venue.get("id")
+        self.bridge.log.emit("已匹配凭证请求：" + item.get("host", "") + item.get("path", ""))
         payload = {"text": value}
         try:
             response = requests.post(SERVER_URL.rstrip("/") + f"/api/credentials/{venue_id}/ingest", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)

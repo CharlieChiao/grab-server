@@ -94,6 +94,7 @@ class CaptureAddon:
         self.events = events
         self.seen = set()
         self.pending = {}
+        self.traffic_seen = set()
 
     @classmethod
     def is_payment(cls, text):
@@ -158,6 +159,11 @@ class CaptureAddon:
         path = request.path or "/"
         hosts = [str(item).lower() for item in self.config.get("hosts", [])]
         paths = [str(item) for item in self.config.get("paths", [])]
+        if (not hosts or host in hosts) and len(self.traffic_seen) < 40:
+            traffic_key = (host, path.split("?", 1)[0])
+            if traffic_key not in self.traffic_seen:
+                self.traffic_seen.add(traffic_key)
+                self.events.put({"kind": "traffic", "host": host, "path": path.split("?", 1)[0]})
         if hosts and host not in hosts:
             return
         if paths and not any(self.match_path(path, pattern) for pattern in paths):
@@ -623,7 +629,9 @@ class CaptureApp(tk.Tk):
         try:
             while True:
                 item = self.events.get_nowait()
-                if item.get("kind") == "learning":
+                if item.get("kind") == "traffic":
+                    self.write_log("检测到代理流量：" + item.get("host", "") + item.get("path", ""))
+                elif item.get("kind") == "learning":
                     stage = item.get("stage") or "account"
                     self.discovery_uploads += 1
                     threading.Thread(target=self.upload_learning_event, args=(stage, item.get("event") or {}), daemon=True).start()
