@@ -32,9 +32,11 @@ try:
         ProxyController,
         WindowsProxyManager,
         cert_path,
+        create_runtime_logger,
         find_free_port,
         load_device_identity,
         local_ip,
+        server_request,
         signed_headers,
     )
 except ImportError:
@@ -43,9 +45,11 @@ except ImportError:
         ProxyController,
         WindowsProxyManager,
         cert_path,
+        create_runtime_logger,
         find_free_port,
         load_device_identity,
         local_ip,
+        server_request,
         signed_headers,
     )
 
@@ -271,6 +275,8 @@ class CaptureWindow(QMainWindow):
         self.selected_venue = None
         self.controller = None
         self.system_proxy = WindowsProxyManager()
+        self.runtime_logger = create_runtime_logger()
+        self.runtime_logger.info("application started")
         self.port = None
         self.discovery_session = None
         self.discovery_config = None
@@ -430,7 +436,7 @@ class CaptureWindow(QMainWindow):
         self.server_badge.setText("● 正在连接")
         def worker():
             try:
-                response = requests.get(SERVER_URL.rstrip("/") + "/api/venues", timeout=12)
+                response = server_request("GET", SERVER_URL.rstrip("/") + "/api/venues", timeout=12)
                 response.raise_for_status()
                 self.bridge.venues.emit(response.json().get("venues", []))
             except Exception as exc:
@@ -479,7 +485,7 @@ class CaptureWindow(QMainWindow):
         def worker():
             try:
                 payload = {}
-                response = requests.get(SERVER_URL.rstrip("/") + "/api/ready/" + venue_id, headers=signed_headers(self.device_identity, payload), timeout=15)
+                response = server_request("GET", SERVER_URL.rstrip("/") + "/api/ready/" + venue_id, headers=signed_headers(self.device_identity, payload), timeout=15)
                 self.bridge.ready.emit(venue_id, response.json())
             except Exception as exc:
                 self.bridge.ready.emit(venue_id, {"ok": False, "detail": str(exc)})
@@ -504,6 +510,7 @@ class CaptureWindow(QMainWindow):
             self.controller.stop()
             self.controller = None
             self.system_proxy.restore()
+            self.write_log("Windows proxy restored")
             self.action.setText("开始监听")
             self.network_label.setText("监听已停止")
             self.capture_label.setText("等待开始监听")
@@ -523,6 +530,7 @@ class CaptureWindow(QMainWindow):
         self.controller = ProxyController(capture, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
         self.system_proxy.enable(self.port)
+        self.write_log(f"Windows proxy enabled at 127.0.0.1:{self.port}")
         self.action.setText("停止监听")
         self.network_label.setText(f"代理地址 {local_ip()}:{self.port}\n手机与电脑同一 Wi-Fi 后可使用此代理")
         self.capture_label.setText("正在监听 " + (self.selected_venue.get("name") or ""))
@@ -566,7 +574,7 @@ class CaptureWindow(QMainWindow):
             return
         payload = {"venueName": venue_name.strip()}
         try:
-            response = requests.post(SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
+            response = server_request("POST", SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
             response.raise_for_status()
             self.discovery_session = response.json()["sessionId"]
         except Exception as exc:
@@ -579,6 +587,7 @@ class CaptureWindow(QMainWindow):
         self.controller = ProxyController(self.discovery_config, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
         self.system_proxy.enable(self.port)
+        self.write_log(f"Windows proxy enabled at 127.0.0.1:{self.port}")
         self.action.setText("停止监听")
         self.network_label.setText(f"发现代理 {local_ip()}:{self.port}")
         self.capture_label.setText("新球场发现 · 账户验证")
@@ -610,7 +619,7 @@ class CaptureWindow(QMainWindow):
             return
         payload = {"stage": stage, "event": event}
         try:
-            response = requests.post(SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/events", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
+            response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/events", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
             if response.status_code == 422:
                 self.bridge.log.emit("已忽略疑似支付接口")
                 return
@@ -640,12 +649,13 @@ class CaptureWindow(QMainWindow):
             self.controller.stop()
             self.controller = None
             self.system_proxy.restore()
+            self.write_log("Windows proxy restored")
             self.action.setText("开始监听")
         session_id = self.discovery_session
         def worker():
             payload = {}
             try:
-                response = requests.post(SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/finalize", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
+                response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/finalize", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
                 response.raise_for_status()
                 self.bridge.discovery_finished.emit(response.json().get("manifest") or {})
             except Exception as exc:
@@ -670,6 +680,7 @@ class CaptureWindow(QMainWindow):
             self.controller.stop()
             self.controller = None
             self.system_proxy.restore()
+            self.write_log("Windows proxy restored")
             self.action.setText("开始监听")
         session_id = self.discovery_session
         self.discovery_session = None
@@ -682,7 +693,7 @@ class CaptureWindow(QMainWindow):
             def worker():
                 try:
                     payload = {}
-                    requests.delete(SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
+                    server_request("DELETE", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
                 except Exception as exc:
                     self.bridge.log.emit("清理发现会话失败：" + str(exc))
             threading.Thread(target=worker, daemon=True).start()
@@ -721,7 +732,7 @@ class CaptureWindow(QMainWindow):
         self.bridge.log.emit("已匹配凭证请求：" + item.get("host", "") + item.get("path", ""))
         payload = {"text": value}
         try:
-            response = requests.post(SERVER_URL.rstrip("/") + f"/api/credentials/{venue_id}/ingest", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
+            response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/credentials/{venue_id}/ingest", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
             response.raise_for_status()
             result = response.json()
             self.bridge.capture_status.emit("上传完成 · ready=" + str(result.get("ready")))
@@ -736,7 +747,7 @@ class CaptureWindow(QMainWindow):
         venue_id = self.selected_venue.get("id")
         payload = {"courts": courts}
         try:
-            response = requests.post(SERVER_URL.rstrip("/") + f"/api/venues/{venue_id}/discover-capture", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
+            response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venues/{venue_id}/discover-capture", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
             response.raise_for_status()
             self.bridge.capture_status.emit(f"球场信息已上传 · {len(response.json().get('discovered', []))} 个场地")
         except Exception as exc:
@@ -749,6 +760,7 @@ class CaptureWindow(QMainWindow):
         self.write_log(error)
 
     def write_log(self, message):
+        self.runtime_logger.info(str(message))
         current = self.log_label.text().splitlines()
         if current == ["等待操作…"]:
             current = []
@@ -760,6 +772,7 @@ class CaptureWindow(QMainWindow):
         event.accept()
 
     def shutdown(self):
+        self.runtime_logger.info("application shutting down")
         self.poll_timer.stop()
         controller = self.controller
         self.controller = None

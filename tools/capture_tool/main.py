@@ -6,6 +6,7 @@ import secrets
 import time
 import uuid
 import json
+import logging
 import os
 import queue
 import socket
@@ -14,6 +15,7 @@ import threading
 import tkinter as tk
 import winreg
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
 from tkinter import messagebox, simpledialog, ttk
 from PIL import ImageTk
 import qrcode
@@ -28,6 +30,27 @@ try:
 except ImportError:
     SERVER_URL = "https://api.cn.orangechai.fun/grab"
     UPDATE_TOKEN = ""
+
+
+SERVER_SESSION = requests.Session()
+SERVER_SESSION.trust_env = False
+
+
+def server_request(method, url, **kwargs):
+    return SERVER_SESSION.request(method, url, **kwargs)
+
+
+def create_runtime_logger():
+    log_dir = identity_path().parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("CourtCredentialCapture")
+    if not logger.handlers:
+        handler = RotatingFileHandler(log_dir / "capture.log", maxBytes=1024 * 1024, backupCount=5, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+    return logger
 
 
 

@@ -183,6 +183,8 @@ Build the single-file per-user installer with `tools/capture_tool/build-installe
 
 On Windows, starting capture saves the current per-user Internet proxy settings and routes system traffic through the local capture proxy. Stopping capture, cancelling discovery, finalizing discovery, or closing the app restores the original proxy settings.
 
+The desktop app writes sanitized rotating diagnostics to `%AppData%\CourtCredentialCapture\logs\capture.log` (1 MB per file, five backups). Its own OrangeChai API calls bypass the capture proxy so credential upload does not fail on the local mitmproxy certificate.
+
 
 ## 多用户数据隔离
 
