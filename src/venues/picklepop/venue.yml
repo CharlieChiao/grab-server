@@ -69,3 +69,9 @@ capture:
     - /wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2
   headers:
     - PSPLVISITORID
+  tasks:
+    - id: identity
+      label: "\u8eab\u4efd\u51ed\u8bc1"
+      source: credential
+      required: true
+      maxAgeHours: 24

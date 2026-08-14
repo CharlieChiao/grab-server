@@ -3,6 +3,7 @@ import json
 import queue
 import sys
 import threading
+from datetime import datetime
 
 import qrcode
 import requests
@@ -87,6 +88,12 @@ class StatusDot(QLabel):
         self.setStyleSheet(f"background:{color}; border-radius:7px;")
 
 
+def format_timestamp(value):
+    if not value: return "暂无"
+    try: return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone().strftime("%m-%d %H:%M")
+    except (ValueError, TypeError): return str(value)
+
+
 class VenueCard(QFrame):
     clicked = Signal(str)
 
@@ -122,8 +129,11 @@ class VenueCard(QFrame):
         desc = QLabel(venue.get("desc") or "球场服务")
         desc.setObjectName("muted")
         desc.setWordWrap(False)
+        self.refreshed = QLabel("\u51ed\u8bc1\u5237\u65b0\uff1a\u6682\u65e0")
+        self.refreshed.setObjectName("muted")
         copy.addWidget(name)
         copy.addWidget(desc)
+        copy.addWidget(self.refreshed)
         top.addLayout(copy, 1)
         self.chevron = QLabel("›")
         self.chevron.setObjectName("chevron")
@@ -161,6 +171,7 @@ class VenueCard(QFrame):
         detail = data.get("detail") or ("凭证有效" if ok else "凭证失效")
         self.status.setText(("凭证有效 · " if ok else "凭证失效 · ") + detail)
         self.status.setStyleSheet(f"color:{OK if ok else ERR};font-weight:600;")
+        self.refreshed.setText("\u51ed\u8bc1\u5237\u65b0\uff1a" + format_timestamp(data.get("credentialUpdatedAt")))
 
     def set_logo(self, content):
         pixmap = QPixmap()
@@ -416,6 +427,18 @@ class CaptureWindow(QMainWindow):
         control_layout.addWidget(self.action)
         side.addWidget(control)
 
+        tasks_card = self.card()
+        tasks_layout = QVBoxLayout(tasks_card)
+        tasks_layout.setContentsMargins(20, 18, 20, 18)
+        tasks_title = QLabel("采集任务")
+        tasks_title.setObjectName("sectionTitle")
+        self.tasks_label = QLabel("选择球场后显示采集清单")
+        self.tasks_label.setObjectName("bodyText")
+        self.tasks_label.setWordWrap(True)
+        tasks_layout.addWidget(tasks_title)
+        tasks_layout.addWidget(self.tasks_label)
+        side.addWidget(tasks_card)
+
         log_card = self.card()
         log_layout = QVBoxLayout(log_card)
         log_layout.setContentsMargins(20, 18, 20, 18)
@@ -495,6 +518,8 @@ class CaptureWindow(QMainWindow):
         card = self.cards.get(venue_id)
         if card:
             card.set_ready(data)
+        if self.selected_venue and self.selected_venue.get("id") == venue_id:
+            self.render_capture_tasks(data.get("captureTasks") or [])
 
     def select_venue(self, venue_id):
         self.selected_venue = next((item for item in self.venues if item.get("id") == venue_id), None)
@@ -504,6 +529,25 @@ class CaptureWindow(QMainWindow):
             name = self.selected_venue.get("name") or venue_id
             self.status_label.setText("已选择 " + name)
             self.capture_label.setText("准备监听该球场凭证")
+            configured = (((self.selected_venue.get("raw") or {}).get("capture") or {}).get("tasks") or [])
+            self.render_capture_tasks([{**task, "completed": False, "valid": None, "updatedAt": None} for task in configured])
+            self.fetch_ready(venue_id)
+
+    def render_capture_tasks(self, tasks):
+        if not tasks:
+            self.tasks_label.setText("该球场未配置采集任务")
+            return
+        lines = []
+        for task in tasks:
+            completed = bool(task.get("completed"))
+            if completed and task.get("valid") is not False: icon, state = "✓", "已完成"
+            elif completed: icon, state = "⚠", "已失效"
+            else: icon, state = "○", "待采集"
+            optional = "" if task.get("required") is not False else " · 可选"
+            updated = (" · " + format_timestamp(task.get("updatedAt"))) if task.get("updatedAt") else ""
+            count = (" · %s 项" % task.get("count")) if task.get("count") is not None else ""
+            lines.append(f"{icon} {task.get('label') or task.get('id')}  {state}{optional}{count}{updated}")
+        self.tasks_label.setText("\n".join(lines))
 
     def toggle_capture(self):
         if self.controller:

@@ -110,11 +110,28 @@ router.post("/risk/:venueId/calibrate", async (req, res) => {
   try { res.json(await calibrateVenue(req.params.venueId, req.user.id, req.body || {})); }
   catch (error) { res.status(500).json({ error: "risk calibration failed", detail: String(error.message || error) }); }
 });
+function captureTaskStatus(venue, venueId, userId, readyResult) {
+  const configured = venue.meta.raw?.capture?.tasks || [];
+  const definitions = configured.length ? configured : (venue.meta.raw?.credentialSchema?.length ? [{ id: "identity", label: "\u8eab\u4efd\u51ed\u8bc1", source: "credential", required: true }] : []);
+  const credential = db.prepare("SELECT updated_at FROM credentials WHERE user_id=? AND venue_id=?").get(userId, venueId);
+  const catalog = db.prepare("SELECT COUNT(*) count,MAX(updated_at) updated_at FROM venue_catalog WHERE venue_id=?").get(venueId);
+  return definitions.map((task) => {
+    let completed = false, updatedAt = null, valid = null, count = null;
+    if (task.source === "credential") { completed = !!credential; updatedAt = credential?.updated_at || null; valid = completed ? readyResult?.ok === true : false; }
+    else if (task.source === "venueCatalog") { count = Number(catalog?.count || 0); completed = count > 0; updatedAt = catalog?.updated_at || null; valid = completed; }
+    const maxAgeHours = Number(task.maxAgeHours || 0) || null;
+    const stale = !!(completed && maxAgeHours && updatedAt && Date.now() - Date.parse(updatedAt) > maxAgeHours * 3600000);
+    return { id: String(task.id || task.source || "task"), label: String(task.label || task.id || task.source || "\u91c7\u96c6\u4efb\u52a1"), source: String(task.source || ""), required: task.required !== false, completed, valid: stale ? false : valid, stale, updatedAt, maxAgeHours, count };
+  });
+}
+
 router.get("/ready/:venueId", async (req, res) => {
   const venue = getVenue(req.params.venueId);
   if (!venue) return res.status(404).json({ error: "unknown venue" });
   const result = await doReadyCheck(req.params.venueId, "api", req.user.id);
-  res.json({ ...result, ok: result.ok === true, venueId: req.params.venueId });
+  const captureTasks = captureTaskStatus(venue, req.params.venueId, req.user.id, result);
+  const credentialTask = captureTasks.find((task) => task.source === "credential");
+  res.json({ ...result, ok: result.ok === true, venueId: req.params.venueId, credentialUpdatedAt: credentialTask?.updatedAt || null, captureTasks });
 });
 router.get("/ready/:venueId/cache", (req, res) => res.json({ ok: true, cached: readyCache.get(req.params.venueId) || null }));
 
