@@ -38,6 +38,14 @@ router.post("/devices/pair", (req, res) => {
   db.prepare(sql).run(payload.deviceId, req.user.id, payload.publicKey, payload.deviceName || "Court Capture", now, now);
   res.json({ ok: true, message: "电脑配对成功", deviceId: payload.deviceId });
 });
+router.get("/devices/me", (req, res) => {
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\u8bbe\u5907\u672a\u914d\u5bf9" });
+  const device = db.prepare("SELECT device_id,device_name,paired_at,last_seen_at,revoked FROM devices WHERE device_id=? AND user_id=?").get(req.user.deviceId, req.user.id);
+  if (!device) return res.status(403).json({ error: "\u8bbe\u5907\u672a\u914d\u5bf9" });
+  const profile = db.prepare("SELECT nickname FROM users WHERE id=?").get(req.user.id);
+  res.json({ ok: true, paired: true, device: { id: device.device_id, name: device.device_name, pairedAt: device.paired_at, lastSeenAt: device.last_seen_at }, user: { nickname: profile?.nickname || null } });
+});
+
 router.post("/venues/:id/discover-capture", (req, res) => {
   const venue = getVenue(req.params.id);
   if (!venue) return res.status(404).json({ error: "unknown venue" });

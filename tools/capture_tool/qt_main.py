@@ -76,6 +76,7 @@ class Bridge(QObject):
     discovery_count = Signal(str, int)
     discovery_finished = Signal(object)
     generic_error = Signal(str, str)
+    pairing = Signal(object)
 
 
 class StatusDot(QLabel):
@@ -288,6 +289,7 @@ class CaptureWindow(QMainWindow):
         self.system_proxy = WindowsProxyManager()
         self.runtime_logger = create_runtime_logger()
         self.runtime_logger.info("application started")
+        self.pair_status = None
         self.port = None
         self.discovery_session = None
         self.discovery_config = None
@@ -312,6 +314,7 @@ class CaptureWindow(QMainWindow):
         self.bridge.discovery_count.connect(self.apply_discovery_count)
         self.bridge.discovery_finished.connect(self.apply_discovery_finished)
         self.bridge.generic_error.connect(lambda title, detail: QMessageBox.critical(self, title, detail))
+        self.bridge.pairing.connect(self.apply_pairing)
 
     def card(self, object_name=None):
         frame = QFrame()
@@ -360,14 +363,17 @@ class CaptureWindow(QMainWindow):
         discover = QPushButton("＋ 发现新球场")
         discover.setObjectName("primaryButton")
         discover.clicked.connect(self.start_discovery)
-        pair = QPushButton("显示配对二维码")
-        pair.setObjectName("secondaryButton")
-        pair.clicked.connect(self.show_pair_qr)
+        self.pair_badge = QLabel("\u25cf \u914d\u5bf9\u72b6\u6001\u68c0\u67e5\u4e2d")
+        self.pair_badge.setObjectName("statusText")
+        self.pair_button = QPushButton("\u663e\u793a\u914d\u5bf9\u4e8c\u7ef4\u7801")
+        self.pair_button.setObjectName("secondaryButton")
+        self.pair_button.clicked.connect(self.show_pair_qr)
         refresh = QPushButton("刷新")
         refresh.setObjectName("secondaryButton")
         refresh.clicked.connect(self.load_venues)
         toolbar_layout.addWidget(discover)
-        toolbar_layout.addWidget(pair)
+        toolbar_layout.addWidget(self.pair_badge)
+        toolbar_layout.addWidget(self.pair_button)
         toolbar_layout.addWidget(refresh)
         root.addWidget(toolbar)
 
@@ -457,6 +463,7 @@ class CaptureWindow(QMainWindow):
 
     def load_venues(self):
         self.server_badge.setText("● 正在连接")
+        self.fetch_pairing_status()
         def worker():
             try:
                 response = server_request("GET", SERVER_URL.rstrip("/") + "/api/venues", timeout=12)
@@ -465,6 +472,42 @@ class CaptureWindow(QMainWindow):
             except Exception as exc:
                 self.bridge.server_error.emit(str(exc))
         threading.Thread(target=worker, daemon=True).start()
+
+    def fetch_pairing_status(self):
+        def worker():
+            payload = {}
+            try:
+                response = server_request("GET", SERVER_URL.rstrip("/") + "/api/devices/me", headers=signed_headers(self.device_identity, payload), timeout=12)
+                if response.status_code in (401, 403):
+                    self.bridge.pairing.emit({"paired": False, "detail": "\u672a\u914d\u5bf9"})
+                    return
+                response.raise_for_status()
+                self.bridge.pairing.emit(response.json())
+            except Exception as exc:
+                self.bridge.pairing.emit({"paired": None, "detail": str(exc)})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def apply_pairing(self, data):
+        paired = data.get("paired")
+        if paired is True:
+            device = data.get("device") or {}
+            user = data.get("user") or {}
+            owner = user.get("nickname") or "\u5df2\u914d\u5bf9\u8d26\u6237"
+            self.pair_badge.setText("\u25cf \u5df2\u914d\u5bf9 \u00b7 " + owner)
+            self.pair_badge.setStyleSheet(f"color:{OK};font-weight:600;")
+            self.pair_button.setText("\u91cd\u65b0\u914d\u5bf9")
+            self.pair_status = True
+            self.write_log("\u8bbe\u5907\u5df2\u914d\u5bf9\uff1a" + (device.get("name") or "\u5f53\u524d\u7535\u8111"))
+        elif paired is False:
+            self.pair_badge.setText("\u25cf \u672a\u914d\u5bf9")
+            self.pair_badge.setStyleSheet(f"color:{ERR};font-weight:600;")
+            self.pair_button.setText("\u663e\u793a\u914d\u5bf9\u4e8c\u7ef4\u7801")
+            self.pair_status = False
+        else:
+            self.pair_badge.setText("\u25cf \u914d\u5bf9\u72b6\u6001\u4e0d\u53ef\u7528")
+            self.pair_badge.setStyleSheet("color:#FF9F0A;")
+            self.pair_status = None
+            self.write_log("\u914d\u5bf9\u72b6\u6001\u68c0\u67e5\u5931\u8d25\uff1a" + str(data.get("detail") or "\u672a\u77e5\u9519\u8bef"))
 
     def clear_venues(self):
         while self.venue_layout.count() > 1:
@@ -605,6 +648,7 @@ class CaptureWindow(QMainWindow):
         layout.addWidget(qr)
         layout.addWidget(close)
         dialog.exec()
+        self.fetch_pairing_status()
 
     def start_discovery(self):
         if self.controller:
@@ -622,7 +666,16 @@ class CaptureWindow(QMainWindow):
             response.raise_for_status()
             self.discovery_session = response.json()["sessionId"]
         except Exception as exc:
-            QMessageBox.critical(self, "无法开始发现", "请先在 Chai 小程序中扫码配对这台电脑。\n\n" + str(exc))
+            detail = str(exc)
+            response = getattr(exc, "response", None)
+            if response is not None:
+                try: detail = response.json().get("error") or detail
+                except Exception: detail = response.text or detail
+            self.write_log("\u65e0\u6cd5\u5f00\u59cb\u53d1\u73b0\uff1a" + detail)
+            if response is not None and response.status_code in (401, 403):
+                QMessageBox.critical(self, "\u9700\u8981\u914d\u5bf9", "\u8fd9\u53f0\u7535\u8111\u5c1a\u672a\u914d\u5bf9\u3002\u8bf7\u5728 Chai \u5c0f\u7a0b\u5e8f“\u6211\u7684”\u9875\u626b\u7801\u914d\u5bf9\u540e\u91cd\u8bd5\u3002\n\n" + detail)
+            else:
+                QMessageBox.critical(self, "\u65e0\u6cd5\u5f00\u59cb\u53d1\u73b0", detail)
             return
         self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
         self.discovery_uploads = 0
