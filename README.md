@@ -179,6 +179,8 @@ data/credentials.json          凭证(不入git)
 
 Fast-start package: keep and distribute the entire `dist/CourtCredentialCapture` directory; the EXE depends on the adjacent `_internal` directory.
 
+Build the single-file per-user installer with `tools/capture_tool/build-installer.ps1`. It outputs `dist/setup/CourtCredentialCapture-Setup.exe` and installs the app under `%LocalAppData%\CourtCredentialCapture`. Pairing data remains under `%AppData%\CourtCredentialCapture`.
+
 
 ## 多用户数据隔离
 
