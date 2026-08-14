@@ -18,6 +18,10 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_fire ON jobs(status, fire_at);
 CREATE TABLE IF NOT EXISTS job_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, attempt INTEGER NOT NULL, planned_at TEXT, dispatched_at TEXT NOT NULL, drift_ms INTEGER, scope_key TEXT, classification TEXT, duration_ms INTEGER, message TEXT);
 CREATE TABLE IF NOT EXISTS venue_catalog (venue_id TEXT NOT NULL, court_id TEXT NOT NULL, provider_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (venue_id, court_id), UNIQUE (venue_id, provider_id));
 CREATE INDEX IF NOT EXISTS idx_attempts_job ON job_attempts(job_id, attempt);
+CREATE TABLE IF NOT EXISTS venue_discovery_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL, venue_name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS venue_discovery_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, stage TEXT NOT NULL, safe_json TEXT NOT NULL, encrypted_payload TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS venue_discovery_drafts (id TEXT PRIMARY KEY, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, venue_name TEXT NOT NULL, manifest_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_discovery_events_session ON venue_discovery_events(session_id, id);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
 function ensureUserColumn(name, definition) {
