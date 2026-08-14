@@ -39,11 +39,18 @@ async function accessToken() {
 export async function notifyJobResult(job) {
   const row = db.prepare("SELECT openid_ciphertext,notify_job_result FROM users WHERE id=?").get(job.userId);
   if (!TEMPLATE_ID || !APPID || !APP_SECRET || !row?.notify_job_result || !row.openid_ciphertext) return { skipped: true };
-  const outcome = job.status === "done" ? "Booking succeeded" : "Booking failed";
+  const target = job.target || {};
+  const first = Array.isArray(target.courts) ? target.courts[0] || {} : target;
+  const venue = String(job.venueId || "").slice(0, 10);
+  const court = String(first.court || first.courtUid || "").slice(0, 8);
+  const time = String(first.time || target.time || "").slice(0, 5);
+  const activity = [venue, court, time].filter(Boolean).join(" ").slice(0, 20) || "\u7403\u573a\u9884\u7ea6";
+  const outcome = job.status === "done" ? "\u9884\u7ea6\u6210\u529f" : "\u9884\u7ea6\u5931\u8d25";
+  const amount = Number(target.ext?.totalCost || target.cost || first.cost || 0);
   const body = { touser: decryptOpenId(row.openid_ciphertext), template_id: TEMPLATE_ID, page: "pages/jobs/index", data: {
-    thing1: { value: String(job.venueId).slice(0, 20) },
-    thing2: { value: outcome },
-    time3: { value: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }).slice(0, 20) },
+    thing2: { value: activity },
+    phrase5: { value: outcome },
+    amount21: { value: amount.toFixed(2) + "\u5143" },
   }};
   const token = await accessToken();
   const response = await fetch("https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=" + encodeURIComponent(token), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
