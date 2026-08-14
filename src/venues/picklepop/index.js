@@ -75,6 +75,15 @@ async function post(path_, cred, payload, timeoutMs = 12000) {
 }
 
 const uidByName = Object.fromEntries(cfg.courts.map((c) => [c.name, c.uid]));
+const slotMinutes = Math.max(1, Number((cfg.bookingHours || {}).slotMinutes) || 60);
+
+function addMinutes(date, time, minutes) {
+  const [year, month, day] = String(date).split("-").map(Number);
+  const [hour, minute] = String(time).split(":").map(Number);
+  const result = new Date(Date.UTC(year, month - 1, day, hour, minute) + minutes * 60 * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${result.getUTCFullYear()}-${pad(result.getUTCMonth() + 1)}-${pad(result.getUTCDate())} ${pad(result.getUTCHours())}:${pad(result.getUTCMinutes())}:00`;
+}
 
 /** meta: 渚涘墠绔睍绀?*/
 export const meta = {
@@ -198,7 +207,7 @@ function normalizeItems(target) {
     return {
       uid,
       begin: `${date} ${time}:00`,
-      end: `${date} ${h}:59:00`,
+      end: addMinutes(date, time, slotMinutes),
       cost: cost != null ? cost : 0,
     };
   };

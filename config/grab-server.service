@@ -1,0 +1,16 @@
+[Unit]
+Description=Grab Court Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/charliejiao/App/grab-server
+ExecStart=/root/charliejiao/App/grab-server/scripts/start-production.sh
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
