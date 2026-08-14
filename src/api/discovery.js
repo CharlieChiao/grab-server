@@ -67,10 +67,24 @@ function endpointSummary(event) {
 
 function compileManifest(session, rows) {
   const apis = {};
+  const score = (stage, item) => {
+    const endpoint = item?.endpoint || {};
+    const haystack = JSON.stringify(endpoint).toLowerCase();
+    let value = endpoint.statusCode && endpoint.statusCode < 400 ? 2 : 0;
+    if (stage === "account") value += (haystack.match(/login|member|account|customer|balance|phone|profile/g) || []).length * 3;
+    if (stage === "courts") value += (haystack.match(/court|classroom|venue|project|stadium|field|场地|球场/g) || []).length * 3;
+    if (stage === "slots") value += (haystack.match(/slot|schedule|appoint|datetime|begin|end|price|cost|时段|价格/g) || []).length * 3;
+    if (stage === "booking") {
+      value += endpoint.method === "POST" ? 5 : 0;
+      value += (haystack.match(/save|create|submit|booking|appointment|order|reserve|预约|下单/g) || []).length * 4;
+      if (/payment|pay|cashier|支付/.test(haystack)) value -= 100;
+    }
+    return value;
+  };
   for (const stage of STAGES) {
     const candidates = rows.filter((row) => row.stage === stage).map((row) => JSON.parse(row.safe_json));
-    const candidate = [...candidates].reverse().find((item) => item.endpoint && item.endpoint.statusCode && item.endpoint.statusCode < 500) || candidates.at(-1);
-    if (candidate) apis[stage] = candidate.endpoint;
+    const candidate = candidates.sort((a, b) => score(stage, b) - score(stage, a))[0];
+    if (candidate) apis[stage] = { ...candidate.endpoint, confidenceScore: score(stage, candidate) };
   }
   const required = ["account", "courts", "slots", "booking"];
   const missing = required.filter((stage) => !apis[stage]);
@@ -137,6 +151,22 @@ router.post("/venue-discovery/sessions/:id/finalize", (req, res) => {
   res.json({ ok: true, draftId, manifest });
 });
 
+router.delete("/venue-discovery/sessions/:id", (req, res) => {
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "设备未配对" });
+  const session = ownedSession(req.params.id, req.user.id);
+  if (!session) return res.status(404).json({ error: "发现会话不存在" });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM venue_discovery_events WHERE session_id=?").run(session.id);
+    db.prepare("DELETE FROM venue_discovery_drafts WHERE session_id=?").run(session.id);
+    db.prepare("DELETE FROM venue_discovery_sessions WHERE id=?").run(session.id);
+    db.exec("COMMIT");
+    res.json({ ok: true, deleted: true });
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    res.status(500).json({ error: "取消发现失败" });
+  }
+});
 router.get("/venue-discovery/sessions/:id", (req, res) => {
   const session = ownedSession(req.params.id, req.user.id);
   if (!session) return res.status(404).json({ error: "发现会话不存在" });

@@ -12,7 +12,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from PIL import ImageTk
 import qrcode
 
@@ -85,12 +85,74 @@ def cert_path():
 
 
 class CaptureAddon:
+    PAYMENT_WORDS = ("payment", "paysign", "prepay", "unifiedorder", "cashier", "wechatpay", "wxpay", "bankcard", "支付密码")
+    DROP_KEYS = ("password", "passwd", "paysign", "prepay", "bank", "cardno", "cvv", "idcard", "paymenttoken", "privatekey")
+    SKIP_HOSTS = ("api.cn.orangechai.fun", "servicewechat.com", "qlogo.cn", "weixin.qq.com")
+
     def __init__(self, capture_config, events):
         self.config = capture_config
         self.events = events
         self.seen = set()
+        self.pending = {}
+
+    @classmethod
+    def is_payment(cls, text):
+        lowered = str(text or "").lower()
+        return any(word in lowered for word in cls.PAYMENT_WORDS)
+
+    @classmethod
+    def sanitize(cls, value, depth=0):
+        if depth > 6:
+            return "[depth-limit]"
+        if isinstance(value, list):
+            return [cls.sanitize(item, depth + 1) for item in value[:12]]
+        if isinstance(value, dict):
+            output = {}
+            for key, item in list(value.items())[:80]:
+                if any(word in str(key).lower() for word in cls.DROP_KEYS):
+                    continue
+                output[str(key)] = cls.sanitize(item, depth + 1)
+            return output
+        if isinstance(value, str):
+            return value[:300] + ("…" if len(value) > 300 else "")
+        return value
+
+    @staticmethod
+    def parse_json_body(message):
+        try:
+            text = message.get_text(strict=False)
+            return json.loads(text) if text else None
+        except Exception:
+            return None
+
+    def learning_request(self, flow):
+        request = flow.request
+        host = (request.host or "").lower()
+        if any(host == item or host.endswith("." + item) for item in self.SKIP_HOSTS):
+            return
+        if request.scheme != "https" or self.is_payment(request.pretty_url):
+            return
+        body = self.parse_json_body(request)
+        if self.is_payment(json.dumps(body, ensure_ascii=False) if body is not None else ""):
+            return
+        ignored_headers = {"cookie", "content-length", "accept-encoding", "connection", "host", "user-agent", "referer"}
+        request_headers = {}
+        for name, value in request.headers.items():
+            if name.lower() in ignored_headers or self.is_payment(name):
+                continue
+            request_headers[name] = str(value)[:500]
+        self.pending[flow.id] = {
+            "method": request.method,
+            "url": request.pretty_url,
+            "requestHeaders": request_headers,
+            "requestBody": self.sanitize(body),
+            "stage": self.config.get("learningStage", "account"),
+        }
 
     def request(self, flow: http.HTTPFlow):
+        if self.config.get("learningMode"):
+            self.learning_request(flow)
+            return
         request = flow.request
         host = (request.host or "").lower()
         path = request.path or "/"
@@ -113,8 +175,27 @@ class CaptureAddon:
         self.seen.add(fingerprint)
         self.events.put({"kind": "credential", "host": host, "path": path, "headers": extracted, "url": request.pretty_url})
 
+    def learning_response(self, flow):
+        captured = self.pending.pop(flow.id, None)
+        if not captured or not flow.response:
+            return
+        content_type = flow.response.headers.get("content-type", "").lower()
+        response_body = self.parse_json_body(flow.response)
+        if response_body is None and "json" not in content_type:
+            return
+        if self.is_payment(json.dumps(response_body, ensure_ascii=False) if response_body is not None else ""):
+            return
+        captured.update({
+            "statusCode": flow.response.status_code,
+            "responseBody": self.sanitize(response_body),
+        })
+        stage = captured.pop("stage", "account")
+        self.events.put({"kind": "learning", "stage": stage, "event": captured})
 
     def response(self, flow: http.HTTPFlow):
+        if self.config.get("learningMode"):
+            self.learning_response(flow)
+            return
         request = flow.request
         host = (request.host or "").lower()
         path = request.path or "/"
@@ -136,10 +217,10 @@ class CaptureAddon:
                 courts[provider_id] = {"providerCourtId": provider_id, "name": slot.get("classRoomName") or provider_id}
         if courts:
             self.events.put({"kind": "discovery", "host": host, "path": path, "courts": list(courts.values())})
+
     @staticmethod
     def match_path(value, pattern):
         return value.startswith(pattern[:-1]) if pattern.endswith("*") else value == pattern
-
 
 class ProxyController:
     def __init__(self, config, events, log):
@@ -185,6 +266,11 @@ class CaptureApp(tk.Tk):
         self.controller = None
         self.port = None
         self.ready_timer = None
+        self.discovery_session = None
+        self.discovery_config = None
+        self.discovery_window = None
+        self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
+        self.discovery_uploads = 0
         self.status_text = tk.StringVar(value="正在连接服务器…")
         self.network_text = tk.StringVar(value="")
         self.capture_text = tk.StringVar(value="等待开始监听")
@@ -224,6 +310,7 @@ class CaptureApp(tk.Tk):
         self.server_badge.pack(side="left")
         ttk.Button(top, text="刷新球场", command=self.load_venues).pack(side="right")
         ttk.Button(top, text="显示配对二维码", command=self.show_pair_qr).pack(side="right", padx=(0, 8))
+        ttk.Button(top, text="发现新球场", style="Accent.TButton", command=self.start_discovery).pack(side="right", padx=(0, 8))
 
         list_card = ttk.Frame(root, style="Card.TFrame", padding=14)
         list_card.pack(fill="both", expand=True, pady=(14, 12))
@@ -263,7 +350,181 @@ class CaptureApp(tk.Tk):
         label = ttk.Label(window, image=photo)
         label.image = photo
         label.pack(padx=24, pady=24)
-        ttk.Label(window, text="请用 Chai 小程序设置页扫码配对").pack(pady=(0, 20))
+        ttk.Label(window, text="请用 Chai 小程序“我的”页扫码配对").pack(pady=(0, 20))
+    def start_discovery(self):
+        if self.controller:
+            messagebox.showinfo("监听进行中", "请先停止当前监听，再开始发现新球场。")
+            return
+        if not cert_path().exists():
+            messagebox.showwarning("需要证书", "未检测到 mitmproxy 根证书：\n\n" + str(cert_path()))
+            return
+        venue_name = simpledialog.askstring("发现新球场", "请输入球场名称（稍后仍可修改）：", parent=self)
+        if not venue_name or not venue_name.strip():
+            return
+        payload = {"venueName": venue_name.strip()}
+        try:
+            response = requests.post(
+                SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions",
+                json=payload,
+                headers=signed_headers(self.device_identity, payload),
+                timeout=15,
+            )
+            response.raise_for_status()
+            self.discovery_session = response.json()["sessionId"]
+        except Exception as exc:
+            messagebox.showerror("无法开始发现", "请先在 Chai 小程序中扫码配对这台电脑。\n\n" + str(exc))
+            return
+        self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
+        self.discovery_uploads = 0
+        self.discovery_config = {"learningMode": True, "learningStage": "account"}
+        self.port = find_free_port()
+        self.controller = ProxyController(self.discovery_config, self.events, self.write_log)
+        self.controller.start(self.port)
+        self.action.configure(text="停止监听")
+        self.network_text.set("发现代理：%s:%s · 请让微信/手机使用此代理" % (local_ip(), self.port))
+        self.capture_text.set("新球场发现：账户验证阶段")
+        self.show_discovery_window(venue_name.strip())
+
+    def show_discovery_window(self, venue_name):
+        if self.discovery_window and self.discovery_window.winfo_exists():
+            self.discovery_window.destroy()
+        window = tk.Toplevel(self)
+        self.discovery_window = window
+        window.title("新球场发现向导")
+        window.geometry("650x500")
+        window.configure(bg="#0f172a")
+        window.transient(self)
+        frame = ttk.Frame(window, style="Root.TFrame", padding=24)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="发现：" + venue_name, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="按顺序完成四个阶段。切换阶段后再操作目标小程序。", style="Sub.TLabel").pack(anchor="w", pady=(4, 18))
+        warning = "安全限制：不要输入支付密码，不要确认微信支付。最后一步只到出现付款页；支付接口和支付参数会被自动丢弃。"
+        ttk.Label(frame, text=warning, style="Bad.TLabel", wraplength=590).pack(fill="x", pady=(0, 16))
+        self.discovery_stage_text = tk.StringVar(value="当前：1. 账户验证")
+        self.discovery_count_text = tk.StringVar(value="已采集 0 条接口")
+        ttk.Label(frame, textvariable=self.discovery_stage_text, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 6))
+        ttk.Label(frame, textvariable=self.discovery_count_text, style="Muted.TLabel").pack(anchor="w", pady=(0, 16))
+        stages = [
+            ("account", "1. 账户验证", "打开目标小程序的“我的/余额/会员”页面"),
+            ("courts", "2. 场地列表", "打开球场、项目或场地选择页面"),
+            ("slots", "3. 时段价格", "选择日期，打开可预约时段和价格页面"),
+            ("booking", "4. 生成订单", "选择一个场次并确认到出现付款页，然后立即停下"),
+        ]
+        for key, title, instruction in stages:
+            row = ttk.Frame(frame, style="Card.TFrame", padding=10)
+            row.pack(fill="x", pady=4)
+            ttk.Button(row, text=title, command=lambda value=key, label=title: self.set_discovery_stage(value, label)).pack(side="left")
+            ttk.Label(row, text=instruction, style="CardText.TLabel").pack(side="left", padx=12)
+        footer = ttk.Frame(frame, style="Root.TFrame")
+        footer.pack(fill="x", pady=(18, 0))
+        ttk.Button(footer, text="取消发现", command=self.cancel_discovery).pack(side="left")
+        ttk.Button(footer, text="完成采集并生成草稿", style="Accent.TButton", command=self.finalize_discovery).pack(side="right")
+
+    def set_discovery_stage(self, stage, label):
+        if not self.discovery_config:
+            return
+        if stage == "booking":
+            confirmed = messagebox.askokcancel(
+                "生成订单阶段",
+                "此阶段可能在目标平台创建一个未支付订单。请只操作到出现付款页，不要输入支付密码或确认微信支付。\n\n是否继续？",
+                parent=self.discovery_window,
+            )
+            if not confirmed:
+                return
+        self.discovery_config["learningStage"] = stage
+        self.discovery_stage_text.set("当前：" + label)
+        self.discovery_count_text.set("已采集 %d 条接口" % self.discovery_counts.get(stage, 0))
+        self.capture_text.set("新球场发现：" + label)
+        self.write_log("发现阶段切换为 " + label)
+
+    def upload_learning_event(self, stage, event):
+        session_id = self.discovery_session
+        if not session_id:
+            return
+        payload = {"stage": stage, "event": event}
+        try:
+            response = requests.post(
+                SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions/" + session_id + "/events",
+                json=payload,
+                headers=signed_headers(self.device_identity, payload),
+                timeout=20,
+            )
+            if response.status_code == 422:
+                self.write_log("已忽略疑似支付接口")
+                return
+            response.raise_for_status()
+            self.discovery_counts[stage] = self.discovery_counts.get(stage, 0) + 1
+            count = self.discovery_counts[stage]
+            self.after(0, lambda: self.discovery_count_text.set("已采集 %d 条接口" % count) if hasattr(self, "discovery_count_text") else None)
+            self.write_log("[%s] 已安全采集 %s %s" % (stage, event.get("method"), event.get("url", "").split("?")[0]))
+        except Exception as exc:
+            self.write_log("发现记录上传失败：" + str(exc))
+        finally:
+            self.after(0, self.discovery_upload_finished)
+
+    def discovery_upload_finished(self):
+        self.discovery_uploads = max(0, self.discovery_uploads - 1)
+
+    def finalize_discovery(self):
+        if not self.discovery_session:
+            return
+        if self.discovery_uploads:
+            messagebox.showinfo("正在整理", "还有 %d 条接口正在安全上传，请稍后再点完成。" % self.discovery_uploads, parent=self.discovery_window)
+            return
+        if self.controller:
+            self.controller.stop()
+            self.controller = None
+            self.action.configure(text="开始监听")
+        payload = {}
+        try:
+            response = requests.post(
+                SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions/" + self.discovery_session + "/finalize",
+                json=payload,
+                headers=signed_headers(self.device_identity, payload),
+                timeout=20,
+            )
+            response.raise_for_status()
+            manifest = response.json().get("manifest") or {}
+            missing = manifest.get("missing") or []
+            if missing:
+                message = "已保存球场草稿，但以下阶段还没有可用接口：\n\n" + "、".join(missing) + "\n\n请重新发现并补充这些操作。"
+                messagebox.showwarning("草稿需要补充", message, parent=self.discovery_window)
+            else:
+                messagebox.showinfo("采集完成", "四类接口均已收集。服务器已生成声明式草稿，接下来只会进行无支付自测，通过后才能启用。", parent=self.discovery_window)
+            self.capture_text.set("新球场草稿已保存")
+            self.write_log("发现会话已完成，状态：" + str(manifest.get("activation")))
+        except Exception as exc:
+            messagebox.showerror("生成草稿失败", str(exc), parent=self.discovery_window)
+            return
+        self.discovery_session = None
+        self.discovery_config = None
+        if self.discovery_window and self.discovery_window.winfo_exists():
+            self.discovery_window.destroy()
+
+    def cancel_discovery(self):
+        if self.controller:
+            self.controller.stop()
+            self.controller = None
+            self.action.configure(text="开始监听")
+        session_id = self.discovery_session
+        self.discovery_session = None
+        self.discovery_config = None
+        if session_id:
+            def remove_session():
+                try:
+                    payload = {}
+                    requests.delete(
+                        SERVER_URL.rstrip("/") + "/api/venue-discovery/sessions/" + session_id,
+                        json=payload,
+                        headers=signed_headers(self.device_identity, payload),
+                        timeout=15,
+                    )
+                except Exception as exc:
+                    self.write_log("清理发现会话失败：" + str(exc))
+            threading.Thread(target=remove_session, daemon=True).start()
+        self.capture_text.set("新球场发现已取消")
+        if self.discovery_window and self.discovery_window.winfo_exists():
+            self.discovery_window.destroy()
     def load_venues(self):
         def worker():
             try:
@@ -351,7 +612,11 @@ class CaptureApp(tk.Tk):
         try:
             while True:
                 item = self.events.get_nowait()
-                if item.get("kind") == "discovery":
+                if item.get("kind") == "learning":
+                    stage = item.get("stage") or "account"
+                    self.discovery_uploads += 1
+                    threading.Thread(target=self.upload_learning_event, args=(stage, item.get("event") or {}), daemon=True).start()
+                elif item.get("kind") == "discovery":
                     self.capture_text.set("捕获到球场列表，正在上传…")
                     self.upload_discovery(item.get("courts") or [])
                 else:
