@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $toolRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $toolRoot "../..")
 $requirements = Join-Path $toolRoot "requirements.txt"
-$entry = Join-Path $toolRoot "main.py"
+$entry = Join-Path $toolRoot "qt_main.py"
 $venue = Join-Path $root "src/venues/picklepop/venue.yml"
 $config = Join-Path $toolRoot "capture_tool_config.py"
 @"

@@ -124,6 +124,8 @@ data/credentials.json          凭证(不入git)
 
 ## GUI 自动捕获工具
 
+桌面界面使用 PySide6/Qt6 实现，采用与 Chai 小程序一致的酒红色设计系统、圆角卡片、阴影、状态徽章和高 DPI 布局。旧 Tkinter 界面仅保留为源码回退，正式 EXE 入口为 `tools/capture_tool/qt_main.py`。
+
 已生成 Windows 可执行文件：
 
     dist/CourtCredentialCapture.exe
