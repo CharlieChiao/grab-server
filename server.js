@@ -9,6 +9,7 @@ import jobsApi from "./src/api/jobs.js";
 import readyApi from "./src/api/ready.js";
 import { requireUser } from "./src/core/auth.js";
 import authApi from "./src/api/auth.js";
+import { startRiskCalibrationScheduler } from "./src/core/riskCalibration.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -51,6 +52,7 @@ async function main() {
 
   // 鍚姩璋冨害鍣?瀹氭椂寮€鎶?+ 姣忓皬鏃跺績璺?+ 寮€鎶㈠墠姣忓垎閽熸娴?
   startScheduler();
+  startRiskCalibrationScheduler();
 
   app.listen(PORT, () => {
     console.log(`[server] listening on :${PORT}`);

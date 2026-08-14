@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS credentials (user_id TEXT NOT NULL, venue_id TEXT NOT
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, venue_id TEXT NOT NULL, target_json TEXT NOT NULL, fire_at TEXT, status TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, public_key TEXT NOT NULL, device_name TEXT, paired_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_fire ON jobs(status, fire_at);
+CREATE TABLE IF NOT EXISTS job_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, attempt INTEGER NOT NULL, planned_at TEXT, dispatched_at TEXT NOT NULL, drift_ms INTEGER, scope_key TEXT, classification TEXT, duration_ms INTEGER, message TEXT);
+CREATE TABLE IF NOT EXISTS venue_catalog (venue_id TEXT NOT NULL, court_id TEXT NOT NULL, provider_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (venue_id, court_id), UNIQUE (venue_id, provider_id));
+CREATE INDEX IF NOT EXISTS idx_attempts_job ON job_attempts(job_id, attempt);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
 export const nowIso = () => new Date().toISOString();

@@ -99,8 +99,20 @@ export const meta = {
 };
 
 export const riskProfile = {
-  mode: "serial-exponential-backoff",
-  booking: { minIntervalMs: 3000, jitterMs: 800, cooldownMs: 10000, maxRetry: 5, backoff: [3000, 6000, 12000, 20000] },
+  scopeKey: "pospal:store:5972810",
+  mode: "serial-linear-backoff",
+  calibration: { samples: 6, decreaseStepMs: 250, minIntervalMs: 1000, blackoutMinutes: 30 },
+  booking: {
+    minIntervalMs: 3000,
+    jitterMs: 800,
+    cooldownMs: 10000,
+    maxRetry: 40,
+    notReleasedIntervalMs: 3000,
+    transientIntervalMs: 3000,
+    increaseStepMs: 500,
+    cooldownStepMs: 5000,
+
+  },
 };
 
 /**
@@ -306,5 +318,38 @@ export async function listSlots(query, cred) {
   }));
 }
 
-export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse };
+
+export function classifyGrabResult(result) {
+  if (result && result.success) return "success";
+  const text = JSON.stringify(result || {}).toLowerCase();
+  if (text.includes("操作太频繁") || text.includes("操作频繁") || text.includes("429")) return "rate-limited";
+  if (text.includes("尚未放场") || text.includes("还没开场") || text.includes("未开放") || text.includes("超过可预约日期")) return "not-released";
+  if (text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("502") || text.includes("503")) return "transient";
+  return "terminal";
+}
+
+export function discoverCapture(exchange) {
+  let json = exchange && exchange.responseBody;
+  if (typeof json === "string") { try { json = JSON.parse(json); } catch { return { courts: [] }; } }
+  const slots = json && json.result && Array.isArray(json.result.slots) ? json.result.slots : [];
+  const courts = new Map();
+  for (const slot of slots) {
+    const providerCourtId = String(slot.txtClassroomUid || slot.classroomUid || "");
+    if (providerCourtId && !courts.has(providerCourtId)) courts.set(providerCourtId, { providerCourtId, name: slot.classRoomName || providerCourtId });
+  }
+  return { courts: [...courts.values()] };
+}
+
+export async function riskProbe(cred) {
+  const probeDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const started = Date.now();
+  try {
+    await listSlots({ date: probeDate }, cred);
+    return { ok: true, rateLimited: false, latencyMs: Date.now() - started, endpoint: "/wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2" };
+  } catch (error) {
+    const message = String(error.message || error);
+    return { ok: false, rateLimited: message.includes("频繁") || message.includes("429"), latencyMs: Date.now() - started, message, endpoint: "/wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2" };
+  }
+}
+export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe };
 

@@ -3,6 +3,7 @@ import { listVenues, getVenue } from "../core/venueRegistry.js";
 import { doReadyCheck, readyCache } from "../core/scheduler.js";
 import { getCredential, setCredential } from "../core/credentialStore.js";
 import { db, nowIso } from "../core/database.js";
+import { calibrateVenue } from "../core/riskCalibration.js";
 
 const router = express.Router();
 
@@ -36,6 +37,24 @@ router.post("/devices/pair", (req, res) => {
   const sql = "INSERT INTO devices(device_id, user_id, public_key, device_name, paired_at, last_seen_at, revoked) VALUES(?, ?, ?, ?, ?, ?, 0) ON CONFLICT(device_id) DO UPDATE SET user_id=excluded.user_id, public_key=excluded.public_key, device_name=excluded.device_name, last_seen_at=excluded.last_seen_at, revoked=0";
   db.prepare(sql).run(payload.deviceId, req.user.id, payload.publicKey, payload.deviceName || "Court Capture", now, now);
   res.json({ ok: true, message: "电脑配对成功", deviceId: payload.deviceId });
+});
+router.post("/venues/:id/discover-capture", (req, res) => {
+  const venue = getVenue(req.params.id);
+  if (!venue) return res.status(404).json({ error: "unknown venue" });
+  if (!credentialUpdateAllowed(req)) return res.status(401).json({ error: "credential update token invalid" });
+  if (typeof venue.discoverCapture !== "function") return res.status(501).json({ error: "venue discovery is not supported" });
+  const submittedCourts = Array.isArray(req.body?.courts) ? req.body.courts : null;
+  const discovered = submittedCourts ? { courts: submittedCourts.map((court) => ({ providerCourtId: String(court.providerCourtId || ""), name: String(court.name || "").slice(0, 100) })).filter((court) => /^\\d{6,}$/.test(court.providerCourtId)) } : venue.discoverCapture(req.body || {});
+  const now = nowIso();
+  const findExisting = db.prepare("SELECT court_id FROM venue_catalog WHERE venue_id=? AND provider_id=?");
+  const insert = db.prepare("INSERT INTO venue_catalog(venue_id,court_id,provider_id,name,type,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(venue_id,provider_id) DO UPDATE SET name=excluded.name,type=excluded.type,updated_at=excluded.updated_at");
+  for (const court of discovered.courts || []) {
+    const configured = (venue.meta.courts || []).find((item) => String(item.uid || item.providerCourtId) === String(court.providerCourtId));
+    const existing = findExisting.get(req.params.id, String(court.providerCourtId));
+    const courtId = configured?.id || existing?.court_id || `provider-${court.providerCourtId}`;
+    insert.run(req.params.id, courtId, String(court.providerCourtId), court.name || courtId, court.type || configured?.type || null, now);
+  }
+  res.json({ ok: true, discovered: discovered.courts || [] });
 });
 router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues() }));
 router.get("/venues/:id/reference-price", async (req, res) => {
@@ -86,6 +105,10 @@ router.get("/venues/:id/slots", async (req, res) => {
   const venue = getVenue(req.params.id);
   if (!venue) return res.status(404).json({ error: "not found" });
   res.json({ ok: true, meta: venue.meta });
+});
+router.post("/risk/:venueId/calibrate", async (req, res) => {
+  try { res.json(await calibrateVenue(req.params.venueId, req.user.id, req.body || {})); }
+  catch (error) { res.status(500).json({ error: "risk calibration failed", detail: String(error.message || error) }); }
 });
 router.get("/ready/:venueId", async (req, res) => {
   const venue = getVenue(req.params.venueId);

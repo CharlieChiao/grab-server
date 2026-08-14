@@ -1,260 +1,108 @@
-/**
- * 璋冨害鍣?(楂樼簿搴︽姠璐増):
- *  1) 绮剧‘寮€鎶? 鍒?job.fireAt 鏃跺埢姣绾у彂灏? 鎻愬墠 preheat 棰勭儹闀胯繛鎺?
- *  2) ready 蹇冭烦: 姣忓皬鏃跺鏈変换鍔＄殑鐞冨満鍋氫竴娆?ready 妫€娴?
- *  3) 涓磋繎寮€鎶㈠姞瀵嗘娴? 浠讳竴 pending 浠诲姟寮€鎶㈠墠 10 鍒嗛挓鍐? 姣忓垎閽?ready 涓€娆?
- *
- * 绮惧害瀹炵幇瑕佺偣:
- *   - tick 姣?5s 鎵弿 pending 浠诲姟, 鍙戠幇 fireAt 璺濅粖 <= LOOKAHEAD_MS 灏变负鍏剁櫥璁颁竴涓簿纭?setTimeout
- *   - setTimeout 鍒扮偣鍓?PREHEAT_MS 鍐呭厛 preheat(寤鸿繛/鐑韩), 鍒扮偣鐢ㄩ鏋勫缓璇锋眰 fire
- *   - 绔嬪嵆鎵ц(fireAt=null 鎴栧凡杩囧幓)鐩存帴璺?
- *   - 鐢?scheduled 闆嗗悎闃查噸澶嶇櫥璁?
- */
 import { listJobs, updateJob } from "./jobStore.js";
 import { getVenue } from "./venueRegistry.js";
 import { getCredential } from "./credentialStore.js";
 import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
+import { db } from "./database.js";
 
-const TICK_MS = 5 * 1000;             // 涓诲惊鐜? 5 绉掓壂涓€娆?
-const LOOKAHEAD_MS = 60 * 1000;       // 璺?fireAt <= 60s 鏃剁櫥璁扮簿纭畾鏃?
-const PREHEAT_MS = 15 * 1000;         // 鎻愬墠 15s 寮€濮嬮鐑?
-
+const TICK_MS = 1000;
+const LOOKAHEAD_MS = 60000;
+const PREHEAT_MS = 15000;
 export const readyCache = new Map();
-let lastHourlyCheck = 0;
+const scheduled = new Set();
 const lastMinuteCheck = new Map();
-const scheduled = new Set();          // 宸茬櫥璁扮簿纭畾鏃剁殑 jobId
-
+let lastHourlyCheck = 0;
 let timer = null;
 
-export function startScheduler() {
-  if (timer) return;
-  console.log("[scheduler] 鍚姩, tick=%ds, lookahead=%ds, preheat=%ds",
-    TICK_MS / 1000, LOOKAHEAD_MS / 1000, PREHEAT_MS / 1000);
-  timer = setInterval(tick, TICK_MS);
-  tick();
-}
-
-export function stopScheduler() {
-  if (timer) clearInterval(timer);
-  timer = null;
-}
+export function startScheduler() { if (timer) return; console.log(`[scheduler] started tick=${TICK_MS}ms`); timer = setInterval(tick, TICK_MS); tick(); }
+export function stopScheduler() { if (timer) clearInterval(timer); timer = null; }
 
 async function tick() {
   const now = Date.now();
   const jobs = listJobs();
-
   for (const job of jobs) {
-    if (job.status !== "pending") continue;
-    const fire = job.fireAt ? new Date(job.fireAt).getTime() : 0;
-
-    // 绔嬪嵆鎵ц (fireAt 鏈鎴栧凡杩囧緢涔?
-    if (!job.fireAt || fire <= now) {
-      if (!scheduled.has(job.id)) {
-        scheduled.add(job.id);
-        runGrab(job).catch((e) => console.error("[grab] error", e));
-      }
-      continue;
-    }
-
-    // 璺濆紑鎶?<= LOOKAHEAD_MS: 鐧昏绮剧‘瀹氭椂
-    const diff = fire - now;
-    if (diff <= LOOKAHEAD_MS && !scheduled.has(job.id)) {
-      scheduled.add(job.id);
-      schedulePreciseFire(job, fire);
-    }
+    if (job.status !== "pending" || scheduled.has(job.id)) continue;
+    const fireMs = job.fireAt ? new Date(job.fireAt).getTime() : 0;
+    if (!job.fireAt || fireMs <= now) { scheduled.add(job.id); runGrab(job).catch((e) => console.error("[grab]", e)); }
+    else if (fireMs - now <= LOOKAHEAD_MS) { scheduled.add(job.id); schedulePreciseFire(job, fireMs); }
   }
-
-  // 姣忓皬鏃?ready 蹇冭烦
-  if (now - lastHourlyCheck >= 60 * 60 * 1000) {
-    lastHourlyCheck = now;
-    doReadyCheckAll("hourly");
-  }
-
-  // 涓磋繎寮€鎶?10鍒嗛挓)姣忓垎閽熸娴?
-  const soonVenues = new Set();
-  for (const job of jobs) {
-    if (job.status !== "pending" || !job.fireAt) continue;
-    const fire = new Date(job.fireAt).getTime();
-    const diff = fire - now;
-    if (diff > 0 && diff <= 10 * 60 * 1000) soonVenues.add(job.venueId);
-  }
-  for (const venueId of soonVenues) {
-    const last = lastMinuteCheck.get(venueId) || 0;
-    if (now - last >= 60 * 1000) {
-      lastMinuteCheck.set(venueId, now);
-      doReadyCheck(venueId, "pre-grab-1min", jobs.find((j) => j.venueId === venueId && j.status === "pending")?.userId || "legacy-owner");
-    }
-  }
+  if (now - lastHourlyCheck >= 3600000) { lastHourlyCheck = now; doReadyCheckAll("hourly"); }
+  const soon = new Map();
+  for (const job of jobs) { if (job.status === "pending" && job.fireAt) { const d = new Date(job.fireAt).getTime() - now; if (d > 0 && d <= 600000 && !soon.has(job.venueId)) soon.set(job.venueId, job.userId); } }
+  for (const [venueId, userId] of soon) { const last = lastMinuteCheck.get(venueId) || 0; if (now - last >= 60000) { lastMinuteCheck.set(venueId, now); doReadyCheck(venueId, "pre-grab-1min", userId); } }
 }
 
-/**
- * 绮剧‘瀹氭椂: 鎻愬墠棰勭儹 -> 鍒?fireAt 姣鍙戝皠
- */
-function schedulePreciseFire(job, fireAtMs) {
-  const now = Date.now();
-  const untilPreheat = Math.max(0, fireAtMs - PREHEAT_MS - now);
-  const untilFire = Math.max(0, fireAtMs - now);
-
+function schedulePreciseFire(job, fireMs) {
   const venue = getVenue(job.venueId);
-  if (!venue) {
-    updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
-    return;
-  }
-  const cred = getCredential(job.venueId, job.userId);
-
-  // 棰勭儹
-  setTimeout(async () => {
-    try {
-      if (typeof venue.preheat === "function") {
-        const r = await venue.preheat(cred);
-        console.log(`[preheat] ${job.venueId} -> ${r.ok ? "OK" : "FAIL"} ${r.detail || ""}`);
-      }
-    } catch (e) {
-      console.warn("[preheat] error:", e.message);
-    }
-  }, untilPreheat);
-
-  // 绮剧‘鍙戝皠
-  setTimeout(() => {
-    runGrab(job, cred, venue).catch((e) => console.error("[grab] error", e));
-  }, untilFire);
-
-  const fireIso = new Date(fireAtMs).toISOString();
-  console.log(`[schedule] job ${job.id} 宸茬櫥璁扮簿纭畾鏃? fireAt=${fireIso}, preheatIn=${untilPreheat}ms, fireIn=${untilFire}ms`);
+  if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
+  const credential = getCredential(job.venueId, job.userId);
+  setTimeout(async () => { try { if (typeof venue.preheat === "function") await venue.preheat(credential); } catch (e) { console.warn("[preheat]", e.message); } }, Math.max(0, fireMs - PREHEAT_MS - Date.now()));
+  setTimeout(() => runGrab(job, credential, venue).catch((e) => console.error("[grab]", e)), Math.max(0, fireMs - Date.now()));
+  console.log(`[schedule] job=${job.id} fireAt=${new Date(fireMs).toISOString()}`);
 }
 
-/**
- * 鎵ц鎶㈣喘. 浼樺厛璧?buildGrabRequest + fireGrab (棰勬瀯寤? 楂樼簿搴?; 鍏煎 grab().
- */
-function targetItems(target) {
-  if (Array.isArray(target.courts) && target.courts.length) {
-    return target.courts.map((item) => typeof item === "string" ? { court: item, courtUid: null, time: target.time } : { court: item.court, courtUid: item.courtUid, time: item.time || target.time });
-  }
-  return [{ court: target.court, courtUid: target.courtUid, time: target.time }];
-}
-
-async function targetIsReleased(venue, target, cred) {
-  if (typeof venue.listSlots !== "function") return true;
-  const ids = new Map((venue.meta.courts || []).map((court) => [court.name, String(court.uid)]));
-  const slots = await venue.listSlots({ date: target.date }, cred);
-  const present = new Set((slots || []).map((slot) => `${String(slot.uid)}|${String(slot.begin || "").slice(11, 16)}`));
-  const items = targetItems(target);
-  return items.length > 0 && items.every((item) => present.has(`${item.courtUid || ids.get(item.court) || item.court}|${item.time}`));
-}
-async function runGrab(job, credArg, venueArg) {
-  updateJob(job.id, { status: "running" });
+async function runGrab(job, credentialArg, venueArg) {
   const venue = venueArg || getVenue(job.venueId);
-  if (!venue) {
-    updateJob(job.id, { status: "failed", result: { message: "鏈煡鐞冨満: " + job.venueId } });
-    return;
-  }
-  const cred = credArg || getCredential(job.venueId, job.userId);
-  if (job.fireAt) {
-    let released = false;
-    let checkError = null;
-    try {
-      released = await targetIsReleased(venue, job.target, cred);
-    } catch (error) {
-      checkError = error;
-    }
-    if (!released) {
-      const retryAt = new Date(Date.now() + 5 * 1000).toISOString();
-      const message = checkError ? "放场检测超时，继续等待" : "尚未放场，继续等待";
-      updateJob(job.id, { status: "pending", fireAt: retryAt, result: { message, retryAt } });
-      scheduled.delete(job.id);
-      console.warn(`[grab] job ${job.id} ${message}，延后至 ${retryAt}${checkError ? `: ${checkError.message || checkError}` : ""}`);
-      return;
-    }
-  }  let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
-  const MAX_RETRY = Math.min(10, Number((job.target.ext && job.target.ext.maxRetry) || profile.booking.maxRetry));
-
-  // 棣栧彂鍓嶅啀棰勬瀯寤轰竴娆?鑰楁椂 <1ms), 淇濊瘉鍑瘉鏄渶鏂扮殑
+  if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
+  const credential = credentialArg || getCredential(job.venueId, job.userId);
+  const adapterProfile = venue.riskProfile || {};
+  const scopeKey = adapterProfile.scopeKey || job.venueId;
+  let profile = getRiskProfile(job.venueId, adapterProfile);
+  const maxAttempts = Math.min(60, Math.max(Number(profile.booking.maxRetry || 5), Number(adapterProfile.booking?.maxRetry || 0), Number(job.target.ext?.maxRetry || 0)));
   let prebuilt = null;
-  if (typeof venue.buildGrabRequest === "function") {
-    try { prebuilt = venue.buildGrabRequest(job.target, cred); } catch {}
-  }
-
+  try { if (typeof venue.buildGrabRequest === "function") prebuilt = venue.buildGrabRequest(job.target, credential); }
+  catch (e) { updateJob(job.id, { status: "failed", result: { message: e.message } }); scheduled.delete(job.id); return; }
+  updateJob(job.id, { status: "running", result: { message: "dispatching", plannedAt: job.fireAt } });
+  const startedMs = Date.now();
   let result = null;
-  const t0 = Date.now();
-  for (let i = 1; i <= MAX_RETRY; i++) {
-    try {
-      result = await enqueueBooking(job.venueId, venue.riskProfile || {}, async () => {
-        const dispatchMs = Date.now();
-        const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
-        console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${i} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchMs - plannedMs}`);
-        if (prebuilt && typeof venue.fireGrab === "function") return venue.fireGrab(prebuilt);
-        return venue.grab(job.target, cred);
-      });
-      profile = recordRiskEvent(job.venueId, result.success ? "success" : isRateLimited(result) ? "rate-limited" : "request", venue.riskProfile || {});
-      if (result.success) break;
-    } catch (e) {
-      result = { success: false, message: String(e) };
-      recordRiskEvent(job.venueId, "request", venue.riskProfile || {});
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let dispatchedMs = null;
+      try {
+        result = await enqueueBooking(job.venueId, adapterProfile, async () => {
+          dispatchedMs = Date.now();
+          const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
+          console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${attempt} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchedMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchedMs - plannedMs}`);
+          return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
+        });
+      } catch (e) { result = { success: false, message: String(e.message || e) }; }
+      const classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
+      recordAttempt(job, attempt, dispatchedMs || Date.now(), classification, dispatchedMs ? Date.now() - dispatchedMs : 0, result?.message);
+      profile = recordRiskEvent(job.venueId, classification === "success" ? "success" : classification === "rate-limited" ? "rate-limited" : "request", adapterProfile);
+      if (classification === "success") break;
+      if (!["not-released", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts) break;
+      const delay = linearRetryDelay(profile, classification);
+      if (classification === "rate-limited") applyCooldown(scopeKey, delay);
+      console.warn(`[grab] job=${job.id} retry=${attempt + 1}/${maxAttempts} class=${classification} delayMs=${delay}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    if (i < MAX_RETRY && isRetryable(result)) {
-      const delay = retryDelay(profile, i);
-      if (isRateLimited(result)) applyCooldown(job.venueId, profile.booking.cooldownMs);
-      console.warn("[grab] retry "+(i + 1)+"/"+MAX_RETRY+" in "+delay+"ms: "+result.message);
-      await new Promise((r) => setTimeout(r, delay));
-    } else if (i < MAX_RETRY) {
-      break;
-    }
-  }
-  const elapsed = Date.now() - t0;
-  updateJob(job.id, {
-    status: result && result.success ? "done" : "failed",
-    result: { ...result, elapsedMs: elapsed },
-  });
-  console.log(`[grab] job ${job.id} -> ${result && result.success ? "鎴愬姛" : "澶辫触"} (${elapsed}ms): ${result && result.message}`);
+    updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
+  } finally { scheduled.delete(job.id); }
 }
 
-function isRateLimited(result) {
+export function classifyResult(result) {
+  if (result?.success) return "success";
   const text = JSON.stringify(result || {}).toLowerCase();
-  return text.includes("操作太频繁")
-    || text.includes("操作频繁")
-    || text.includes("too frequent")
-    || text.includes("rate limit")
-    || text.includes("429");
+  if (text.includes("操作太频繁") || text.includes("操作频繁") || text.includes("too frequent") || text.includes("rate limit") || text.includes("429")) return "rate-limited";
+  if (text.includes("尚未放场") || text.includes("还没开场") || text.includes("未开放") || text.includes("超过可预约日期") || text.includes("not released")) return "not-released";
+  if (text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("502") || text.includes("503")) return "transient";
+  return "terminal";
 }
-
-function isRetryable(result) {
-  if (!result || result.success) return false;
-  if (isRateLimited(result)) return true;
-  const text = String(result.message || result).toLowerCase();
-  return text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("503") || text.includes("502");
+export function linearRetryDelay(profile, classification) {
+  const b = profile.booking || {};
+  const base = classification === "not-released" ? Number(b.notReleasedIntervalMs || b.minIntervalMs || 3000) : classification === "transient" ? Number(b.transientIntervalMs || b.minIntervalMs || 3000) : Number(b.cooldownMs || 10000);
+  return base + Math.floor(Math.random() * (Number(b.jitterMs || 0) + 1));
 }
-
-function retryDelay(profile, attempt) {
-  const configured = profile.booking.backoff && profile.booking.backoff[attempt - 1];
-  if (configured) return configured + Math.floor(Math.random() * Math.max(250, profile.booking.jitterMs));
-  return Math.min(60000, 3000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * Math.max(250, profile.booking.jitterMs));
+function recordAttempt(job, attempt, dispatchedMs, classification, durationMs, message) {
+  const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
+  const scopeKey = getVenue(job.venueId)?.riskProfile?.scopeKey || job.venueId;
+  try { db.prepare("INSERT INTO job_attempts(job_id,attempt,planned_at,dispatched_at,drift_ms,scope_key,classification,duration_ms,message) VALUES(?,?,?,?,?,?,?,?,?)").run(job.id, attempt, job.fireAt || null, new Date(dispatchedMs).toISOString(), plannedMs == null ? null : dispatchedMs - plannedMs, scopeKey, classification, durationMs, String(message || "").slice(0, 500)); } catch (e) { console.warn("[audit]", e.message); }
 }
 
 export async function doReadyCheck(venueId, reason = "manual", userId = "legacy-owner") {
-  const venue = getVenue(venueId);
-  if (!venue) return { ok: false, detail: "鏈煡鐞冨満" };
-  const cred = getCredential(venueId, userId);
-  let res;
-  try {
-    res = await venue.ready(cred);
-  } catch (e) {
-    res = { ok: false, detail: String(e) };
-  }
-  readyCache.set(venueId, { at: new Date().toISOString(), reason, result: res });
-  console.log(`[ready:${reason}] ${venueId} -> ${res.ok ? "OK" : "FAIL"} ${res.detail || ""}`);
-  return res;
+  const venue = getVenue(venueId); if (!venue) return { ok: false, detail: "unknown venue" };
+  let result; try { result = await venue.ready(getCredential(venueId, userId)); } catch (e) { result = { ok: false, detail: String(e.message || e) }; }
+  readyCache.set(`${userId}:${venueId}`, { at: new Date().toISOString(), reason, result }); readyCache.set(venueId, { at: new Date().toISOString(), reason, result });
+  console.log(`[ready:${reason}] ${venueId} -> ${result.ok ? "OK" : "FAIL"} ${result.detail || ""}`); return result;
 }
-
-export async function doReadyCheckAll(reason) {
-  const jobs = listJobs();
-  const venueIds = new Set(jobs.map((j) => j.venueId));
-  for (const venueId of venueIds) {
-    const userIds = new Set(jobs.filter((j) => j.venueId === venueId).map((j) => j.userId || "legacy-owner"));
-    for (const userId of userIds) await doReadyCheck(venueId, reason, userId);
-  }
-}
-
-
-
-
+export async function doReadyCheckAll(reason) { const pairs = new Map(listJobs().map((j) => [`${j.userId}:${j.venueId}`, j])); for (const j of pairs.values()) await doReadyCheck(j.venueId, reason, j.userId); }
