@@ -294,7 +294,11 @@ class CaptureApp(tk.Tk):
 
     def fetch_ready(self, venue_id):
         try:
-            response = requests.get(SERVER_URL.rstrip("/") + "/api/ready/" + venue_id, timeout=15)
+            response = requests.get(
+                SERVER_URL.rstrip("/") + "/api/ready/" + venue_id,
+                headers=signed_headers(self.device_identity, {}),
+                timeout=15,
+            )
             data = response.json()
             self.after(0, lambda: self.apply_ready(venue_id, data))
         except Exception as exc:
