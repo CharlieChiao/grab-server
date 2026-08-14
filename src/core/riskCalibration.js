@@ -81,6 +81,8 @@ export async function calibrateVenue(venueId, userId, options = {}) {
 
 let timer = null, lastDailyKey = null;
 export function startRiskCalibrationScheduler() {
+  // Booking-sensitive calibration is intentionally manual only.
+  if (process.env.ENABLE_BACKGROUND_RISK_CALIBRATION !== "true") return;
   if (timer) return;
   timer = setInterval(async () => {
     const bj = new Date(Date.now() + 28800000), key = bj.toISOString().slice(0, 10);

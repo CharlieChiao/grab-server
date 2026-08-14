@@ -4,6 +4,7 @@ import { getCredential } from "./credentialStore.js";
 import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
+import { notifyJobResult } from "./notifications.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -83,7 +84,8 @@ async function runGrab(job, credentialArg, venueArg) {
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
+    const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
+    if (completed) notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
   } finally { scheduled.delete(job.id); }
 }
 
