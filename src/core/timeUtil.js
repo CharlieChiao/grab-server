@@ -55,10 +55,10 @@ export function autoFireAt(venueMeta, target) {
   const wantNames = [];
   if (Array.isArray(target.courts) && target.courts.length > 0) {
     for (const c of target.courts) {
-      wantNames.push(typeof c === "string" ? c : c.court);
+      wantNames.push(typeof c === "string" ? c : (c.courtUid || c.court));
     }
-  } else if (target.court) {
-    wantNames.push(target.court);
+  } else if (target.courtUid || target.court) {
+    wantNames.push(target.courtUid || target.court);
   }
 
   // 找每个场地的 advanceDays

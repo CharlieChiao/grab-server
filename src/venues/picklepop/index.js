@@ -83,6 +83,7 @@ export const meta = {
   logo: cfg.logo,
   desc: cfg.desc,
   advanceDays: cfg.advanceDays,
+  bookingHours: cfg.bookingHours,
   courts: cfg.courts,
   raw: cfg,
 };
@@ -189,10 +190,10 @@ function normalizeItems(target) {
   const date = target.date;
   if (!date) throw new Error("target.date 蹇呭～");
 
-  const toItem = (courtName, time, cost) => {
-    if (!courtName) throw new Error("courts[].court 蹇呭～");
+  const toItem = (courtName, courtUid, time, cost) => {
+    if (!courtName && !courtUid) throw new Error("courts[].court or courts[].courtUid is required");
     if (!time) throw new Error("time 蹇呭～(椤跺眰鎴栨瘡椤?");
-    const uid = uidByName[courtName] || courtName;
+    const uid = courtUid || uidByName[courtName] || courtName;
     const [h] = String(time).split(":");
     return {
       uid,
@@ -206,14 +207,14 @@ function normalizeItems(target) {
   if (Array.isArray(target.courts) && target.courts.length > 0) {
     return target.courts.map((c) => {
       if (typeof c === "string") {
-        return toItem(c, target.time, target.cost);
+        return toItem(c, null, target.time, target.cost);
       }
-      return toItem(c.court, c.time || target.time, c.cost != null ? c.cost : target.cost);
+      return toItem(c.court, c.courtUid, c.time || target.time, c.cost != null ? c.cost : target.cost);
     });
   }
 
   // 鍗曞満鍦板舰鎬?鍚戝悗鍏煎)
-  return [toItem(target.court, target.time, target.cost)];
+  return [toItem(target.court, target.courtUid, target.time, target.cost)];
 }
 
 /**

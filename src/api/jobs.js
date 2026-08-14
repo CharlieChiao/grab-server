@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import { listJobsForUser, getJob, createJob, deleteJob } from "../core/jobStore.js";
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
@@ -8,7 +8,7 @@ const router = express.Router();
 function validateTarget(target) {
   if (!target || typeof target !== "object") return "target is required";
   if (!target.date) return "target.date is required";
-  const single = !!target.court;
+  const single = !!(target.court || target.courtUid);
   const multi = Array.isArray(target.courts) && target.courts.length > 0;
   if (!single && !multi) return "target.court or target.courts is required";
   if (single && multi) return "target.court and target.courts cannot both exist";
@@ -18,7 +18,7 @@ function validateTarget(target) {
       if (typeof c === "string") {
         if (!target.time) return "target.courts[" + i + "] requires target.time";
       } else if (c && typeof c === "object") {
-        if (!c.court) return "target.courts[" + i + "].court is required";
+        if (!c.court && !c.courtUid) return "target.courts[" + i + "].court or .courtUid is required";
         if (!c.time && !target.time) return "target.courts[" + i + "].time or target.time is required";
       } else {
         return "target.courts[" + i + "] is invalid";

@@ -129,9 +129,9 @@ function schedulePreciseFire(job, fireAtMs) {
  */
 function targetItems(target) {
   if (Array.isArray(target.courts) && target.courts.length) {
-    return target.courts.map((item) => typeof item === "string" ? { court: item, time: target.time } : { court: item.court, time: item.time || target.time });
+    return target.courts.map((item) => typeof item === "string" ? { court: item, courtUid: null, time: target.time } : { court: item.court, courtUid: item.courtUid, time: item.time || target.time });
   }
-  return [{ court: target.court, time: target.time }];
+  return [{ court: target.court, courtUid: target.courtUid, time: target.time }];
 }
 
 async function targetIsReleased(venue, target, cred) {
@@ -140,7 +140,7 @@ async function targetIsReleased(venue, target, cred) {
   const slots = await venue.listSlots({ date: target.date }, cred);
   const present = new Set((slots || []).map((slot) => `${String(slot.uid)}|${String(slot.begin || "").slice(11, 16)}`));
   const items = targetItems(target);
-  return items.length > 0 && items.every((item) => present.has(`${ids.get(item.court) || item.court}|${item.time}`));
+  return items.length > 0 && items.every((item) => present.has(`${item.courtUid || ids.get(item.court) || item.court}|${item.time}`));
 }
 async function runGrab(job, credArg, venueArg) {
   updateJob(job.id, { status: "running" });
