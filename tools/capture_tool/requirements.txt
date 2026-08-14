@@ -1,0 +1,6 @@
+mitmproxy>=11.0
+PyYAML>=6.0
+requests>=2.32
+pyinstaller>=6.0
+
+qrcode[pil]>=7.4

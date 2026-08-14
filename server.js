@@ -7,7 +7,7 @@ import { loadVenues } from "./src/core/venueRegistry.js";
 import { startScheduler } from "./src/core/scheduler.js";
 import jobsApi from "./src/api/jobs.js";
 import readyApi from "./src/api/ready.js";
-import { requireUser } from "./src/core/auth.js";
+import { requireUser, verifyDeviceRequest } from "./src/core/auth.js";
 import authApi from "./src/api/auth.js";
 import { startRiskCalibrationScheduler } from "./src/core/riskCalibration.js";
 
@@ -24,6 +24,7 @@ async function main() {
   app.use("/api/auth", authApi);
   app.use("/api", (req, res, next) => {
     if (req.path === "/venues" || /^\/venues\/[^/]+$/.test(req.path)) return next();
+    const deviceUser = verifyDeviceRequest(req); if (deviceUser) { req.user = deviceUser; req.deviceAuthenticated = true; return next(); }
     return requireUser(req, res, next);
   });
   app.use("/api/jobs", jobsApi);

@@ -35,3 +35,20 @@ export function requireUser(req, res, next) {
   req.user = user;
   next();
 }
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+export function verifyDeviceRequest(req) {
+  const deviceId = req.get("x-device-id"), timestamp = req.get("x-device-timestamp"), signature = req.get("x-device-signature");
+  if (!deviceId || !timestamp || !signature || Math.abs(Date.now() - Number(timestamp)) > 300000) return null;
+  const row = db.prepare("SELECT * FROM devices WHERE device_id=? AND revoked=0").get(deviceId);
+  if (!row) return null;
+  const bodyHash = crypto.createHash("sha256").update(canonicalJson(req.body || {})).digest("hex");
+  const expected = crypto.createHmac("sha256", row.public_key).update(`${timestamp}.${bodyHash}`).digest("hex");
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  db.prepare("UPDATE devices SET last_seen_at=? WHERE device_id=?").run(nowIso(), deviceId);
+  return { id: row.user_id, deviceId };
+}

@@ -1,4 +1,9 @@
 import asyncio
+import hashlib
+import hmac
+import secrets
+import time
+import uuid
 import json
 import os
 import queue
@@ -8,6 +13,8 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
+from PIL import ImageTk
+import qrcode
 
 import requests
 import yaml
@@ -21,6 +28,28 @@ except ImportError:
     UPDATE_TOKEN = ""
 
 
+
+def identity_path():
+    root = Path(os.environ.get("APPDATA", Path.home())) / "CourtCredentialCapture"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "device.json"
+
+
+def load_device_identity():
+    path = identity_path()
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    identity = {"deviceId": str(uuid.uuid4()), "secret": secrets.token_hex(32), "deviceName": socket.gethostname()}
+    path.write_text(json.dumps(identity), encoding="utf-8")
+    return identity
+
+
+def signed_headers(identity, payload):
+    timestamp = str(int(time.time() * 1000))
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    body_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    signature = hmac.new(identity["secret"].encode("utf-8"), (timestamp + "." + body_hash).encode("utf-8"), hashlib.sha256).hexdigest()
+    return {"x-device-id": identity["deviceId"], "x-device-timestamp": timestamp, "x-device-signature": signature}
 def app_root():
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -150,6 +179,7 @@ class CaptureApp(tk.Tk):
         self.minsize(840, 560)
         self.configure(bg="#0f172a")
         self.events = queue.Queue()
+        self.device_identity = load_device_identity()
         self.venues = []
         self.selected_venue = None
         self.controller = None
@@ -193,6 +223,7 @@ class CaptureApp(tk.Tk):
         self.server_badge = ttk.Label(top, text="● 服务器连接中", style="Sub.TLabel")
         self.server_badge.pack(side="left")
         ttk.Button(top, text="刷新球场", command=self.load_venues).pack(side="right")
+        ttk.Button(top, text="显示配对二维码", command=self.show_pair_qr).pack(side="right", padx=(0, 8))
 
         list_card = ttk.Frame(root, style="Card.TFrame", padding=14)
         list_card.pack(fill="both", expand=True, pady=(14, 12))
@@ -222,6 +253,17 @@ class CaptureApp(tk.Tk):
         self.log_text = tk.Text(log_card, height=5, bg="#0b1220", fg="#94a3b8", insertbackground="white", relief="flat", state="disabled", font=("Consolas", 9))
         self.log_text.pack(fill="x")
 
+
+    def show_pair_qr(self):
+        payload = {"type": "court_capture_pair", "deviceId": self.device_identity["deviceId"], "publicKey": self.device_identity["secret"], "deviceName": self.device_identity["deviceName"]}
+        image = qrcode.make(json.dumps(payload, ensure_ascii=False)).resize((320, 320))
+        window = tk.Toplevel(self)
+        window.title("扫码配对")
+        photo = ImageTk.PhotoImage(image)
+        label = ttk.Label(window, image=photo)
+        label.image = photo
+        label.pack(padx=24, pady=24)
+        ttk.Label(window, text="请用 Chai 小程序设置页扫码配对").pack(pady=(0, 20))
     def load_venues(self):
         def worker():
             try:
@@ -287,9 +329,6 @@ class CaptureApp(tk.Tk):
         if not self.selected_venue:
             messagebox.showinfo("请选择球场", "请先从列表中选择一个球场。")
             return
-        if not UPDATE_TOKEN:
-            messagebox.showerror("配置错误", "该工具没有内置上传令牌，请重新获取正式打包版本。")
-            return
         if not cert_path().exists():
             messagebox.showwarning("需要证书", "未检测到 mitmproxy 根证书：\n\n" + str(cert_path()))
             return
@@ -326,7 +365,8 @@ class CaptureApp(tk.Tk):
         venue_id = self.selected_venue.get("id")
         url = SERVER_URL.rstrip("/") + "/api/credentials/" + venue_id + "/ingest"
         try:
-            response = requests.post(url, json={"text": value}, headers={"x-credential-update-token": UPDATE_TOKEN}, timeout=15)
+            payload = {"text": value}
+            response = requests.post(url, json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
             response.raise_for_status()
             result = response.json()
             self.capture_text.set("上传完成 · ready=" + str(result.get("ready")))
@@ -341,7 +381,8 @@ class CaptureApp(tk.Tk):
         venue_id = self.selected_venue.get("id")
         url = SERVER_URL.rstrip("/") + "/api/venues/" + venue_id + "/discover-capture"
         try:
-            response = requests.post(url, json={"courts": courts}, headers={"x-credential-update-token": UPDATE_TOKEN}, timeout=20)
+            payload = {"courts": courts}
+            response = requests.post(url, json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
             response.raise_for_status()
             count = len(response.json().get("discovered", []))
             self.capture_text.set("球场信息已上传 · %d 个场地" % count)

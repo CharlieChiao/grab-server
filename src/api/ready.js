@@ -126,7 +126,7 @@ function extractVisitorId(input) {
 }
 function credentialUpdateAllowed(req) {
   const expected = process.env.CREDENTIAL_UPDATE_TOKEN;
-  return !!expected && req.get("x-credential-update-token") === expected;
+  return req.deviceAuthenticated === true || (!!expected && req.get("x-credential-update-token") === expected);
 }
 router.post("/credentials/:venueId/ingest", async (req, res) => {
   const venue = getVenue(req.params.venueId);
