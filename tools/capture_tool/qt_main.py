@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QCheckBox,
     QLineEdit,
+    QRadioButton,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -80,6 +81,7 @@ class Bridge(QObject):
     generic_error = Signal(str, str)
     pairing = Signal(object)
     discovery_candidate = Signal(object)
+    discovery_locked = Signal(object)
 
 
 class StatusDot(QLabel):
@@ -190,6 +192,7 @@ class DiscoveryDialog(QDialog):
     cancel_requested = Signal()
     candidate_changed = Signal(int, bool, str, str, str)
     candidates_confirmed = Signal()
+    entry_lock_requested = Signal(int)
 
     STAGES = [
         ("account", "1", "\u8d26\u6237\u9a8c\u8bc1", "\u6253\u5f00\u76ee\u6807\u5c0f\u7a0b\u5e8f\u7684\u201c\u6211\u7684\u3001\u4f59\u989d\u6216\u4f1a\u5458\u201d\u9875\u9762"),
@@ -205,6 +208,9 @@ class DiscoveryDialog(QDialog):
         self.setModal(False)
         self.stage = "account"
         self.candidate_cards = {}
+        self.discovery_phase = "entry"
+        self.entry_selection = None
+        self.stage_buttons = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 26, 28, 24)
         root.setSpacing(12)
@@ -267,6 +273,8 @@ class DiscoveryDialog(QDialog):
             button = QPushButton("\u5207\u6362")
             button.setObjectName("secondaryButton")
             button.clicked.connect(lambda _=False, k=key, l=f"{number}. {label}": self.select_stage(k, l))
+            button.setEnabled(False)
+            self.stage_buttons[key] = button
             row.addWidget(button)
             root.addWidget(card)
         actions = QHBoxLayout()
@@ -287,16 +295,19 @@ class DiscoveryDialog(QDialog):
             return
         endpoint = item.get("endpoint") or {}
         relevance = item.get("candidate") or {}
-        selected = bool(relevance.get("nameMatched"))
         card = QFrame()
         card.setObjectName("stepCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 11, 14, 11)
         layout.setSpacing(6)
         top = QHBoxLayout()
-        checkbox = QCheckBox("\u7eb3\u5165\u8349\u7a3f")
-        checkbox.setChecked(selected)
-        top.addWidget(checkbox)
+        if self.discovery_phase == "entry":
+            select = QRadioButton("\u9009\u4e3a\u5165\u53e3")
+            select.toggled.connect(lambda checked, value=event_id: self.select_entry(value) if checked else None)
+        else:
+            select = QCheckBox("\u7eb3\u5165\u8349\u7a3f")
+            select.setChecked(True)
+        top.addWidget(select)
         top.addStretch(1)
         score = QLabel(f"\u76f8\u5173\u5ea6 {relevance.get('score', 0)}")
         score.setObjectName("muted")
@@ -312,34 +323,41 @@ class DiscoveryDialog(QDialog):
         context_label = QLabel(" \u00b7 ".join(context) or "\u5f85\u4f60\u786e\u8ba4")
         context_label.setObjectName("muted")
         layout.addWidget(context_label)
-        label_input = QLineEdit()
-        label_input.setPlaceholderText("\u81ea\u5b9a\u4e49\u540d\u79f0\uff08\u4f8b\uff1a\u65f6\u6bb5\u67e5\u8be2\uff09")
-        tags_input = QLineEdit()
-        tags_input.setPlaceholderText("\u6807\u7b7e\uff0c\u7528\u9017\u53f7\u5206\u9694\uff08\u4f8b\uff1aslots, price\uff09")
-        note_input = QLineEdit()
-        note_input.setPlaceholderText("\u5907\u6ce8\uff08\u9009\u586b\uff09")
-        layout.addWidget(label_input)
-        layout.addWidget(tags_input)
-        layout.addWidget(note_input)
-        def save():
-            self.candidate_changed.emit(event_id, checkbox.isChecked(), label_input.text(), tags_input.text(), note_input.text())
-        checkbox.toggled.connect(lambda _checked: save())
-        label_input.editingFinished.connect(save)
-        tags_input.editingFinished.connect(save)
-        note_input.editingFinished.connect(save)
-        insert_at = 0
-        score_value = int(relevance.get("score") or 0)
-        for other_id, other in self.candidate_cards.items():
-            if score_value > other["score"]:
-                break
-            insert_at += 1
-        self.candidate_layout.insertWidget(insert_at, card)
-        self.candidate_cards[event_id] = {"card": card, "score": score_value}
-        self.candidate_hint.setText("\u5df2\u51fa\u73b0\u5019\u9009\u4f1a\u8bdd\u4fe1\u606f\u3002\u53ef\u52fe\u9009\u7eb3\u5165\u8349\u7a3f\uff0c\u5e76\u4e3a\u540e\u7eed\u914d\u7f6e\u586b\u5199\u540d\u79f0\u3001\u6807\u7b7e\u548c\u5907\u6ce8\u3002")
+        if self.discovery_phase == "flow":
+            label_input = QLineEdit(); label_input.setPlaceholderText("\u81ea\u5b9a\u4e49\u540d\u79f0\uff08\u4f8b\uff1a\u65f6\u6bb5\u67e5\u8be2\uff09")
+            tags_input = QLineEdit(); tags_input.setPlaceholderText("\u6807\u7b7e\uff0c\u7528\u9017\u53f7\u5206\u9694")
+            note_input = QLineEdit(); note_input.setPlaceholderText("\u5907\u6ce8\uff08\u9009\u586b\uff09")
+            layout.addWidget(label_input); layout.addWidget(tags_input); layout.addWidget(note_input)
+            def save(): self.candidate_changed.emit(event_id, select.isChecked(), label_input.text(), tags_input.text(), note_input.text())
+            select.toggled.connect(lambda _checked: save()); label_input.editingFinished.connect(save); tags_input.editingFinished.connect(save); note_input.editingFinished.connect(save)
+        self.candidate_layout.insertWidget(self.candidate_layout.count() - 1, card)
+        self.candidate_cards[event_id] = {"card": card, "score": int(relevance.get("score") or 0), "select": select}
+        self.candidate_hint.setText("\u8bf7\u4ec5\u9009\u62e9\u4e00\u4e2a\u5165\u53e3 URL\uff0c\u786e\u8ba4\u540e\u4f1a\u9501\u5b9a\u5b83\u6240\u5c5e\u670d\u52a1\u8303\u56f4\u3002" if self.discovery_phase == "entry" else "\u5df2\u9501\u5b9a\u5165\u53e3\uff1b\u53ea\u663e\u793a\u8be5\u670d\u52a1\u8303\u56f4\u5185\u7684\u4f1a\u8bdd\u4fe1\u606f\u3002")
+
+    def select_entry(self, event_id):
+        self.entry_selection = event_id
+        for other_id, item in self.candidate_cards.items():
+            if other_id != event_id:
+                item["select"].setChecked(False)
 
     def confirm_candidates(self):
+        if self.discovery_phase == "entry":
+            if not self.entry_selection:
+                QMessageBox.information(self, "\u8bf7\u9009\u62e9\u5165\u53e3", "\u8bf7\u5148\u9009\u62e9\u4e00\u6761\u5019\u9009 URL\u3002")
+                return
+            self.entry_lock_requested.emit(self.entry_selection)
+            return
         self.candidates_confirmed.emit()
-        self.candidate_hint.setText("\u5019\u9009\u5df2\u786e\u8ba4\u3002\u73b0\u5728\u8bf7\u4f9d\u6b21\u5207\u6362\u4e0b\u65b9\u9636\u6bb5\uff0c\u5b8c\u6574\u8d70\u5230\u4ed8\u6b3e\u9875\u4e4b\u524d\u5373\u53ef\u3002")
+
+    def set_entry_locked(self, scope):
+        self.discovery_phase = "flow"
+        self.entry_selection = None
+        for item in self.candidate_cards.values():
+            item["card"].deleteLater()
+        self.candidate_cards = {}
+        for button in self.stage_buttons.values():
+            button.setEnabled(True)
+        self.candidate_hint.setText("\u5165\u53e3\u5df2\u9501\u5b9a\uff1a" + str(scope.get("origin", "")) + "\n\u73b0\u5728\u6309\u4e0b\u65b9\u9636\u6bb5\u64cd\u4f5c\uff0c\u53ea\u6574\u7406\u8be5\u670d\u52a1\u8303\u56f4\u5185\u7684\u4f1a\u8bdd\u4fe1\u606f\u3002")
 
     def select_stage(self, key, label):
         self.stage_selected.emit(key, label)
@@ -396,6 +414,7 @@ class CaptureWindow(QMainWindow):
         self.bridge.generic_error.connect(lambda title, detail: QMessageBox.critical(self, title, detail))
         self.bridge.pairing.connect(self.apply_pairing)
         self.bridge.discovery_candidate.connect(self.add_discovery_candidate)
+        self.bridge.discovery_locked.connect(self.apply_discovery_locked)
 
     def card(self, object_name=None):
         frame = QFrame()
@@ -760,7 +779,7 @@ class CaptureWindow(QMainWindow):
             return
         self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
         self.discovery_uploads = 0
-        self.discovery_config = {"learningMode": True, "learningStage": "account"}
+        self.discovery_config = {"learningMode": True, "learningStage": "entry", "learningScope": None}
         self.port = find_free_port()
         self.controller = ProxyController(self.discovery_config, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
@@ -775,22 +794,26 @@ class CaptureWindow(QMainWindow):
         self.discovery_dialog.cancel_requested.connect(self.cancel_discovery)
         self.discovery_dialog.candidate_changed.connect(self.save_candidate_annotation)
         self.discovery_dialog.candidates_confirmed.connect(self.confirm_discovery_candidates)
+        self.discovery_dialog.entry_lock_requested.connect(self.lock_discovery_entry)
         self.discovery_dialog.show()
 
     def set_discovery_stage(self, stage, label):
         if not self.discovery_config:
             return
+        if not self.discovery_config.get("learningScope"):
+            QMessageBox.information(self, "\u5148\u9009\u5165\u53e3", "\u8bf7\u5148\u5728\u5019\u9009\u4f1a\u8bdd\u4fe1\u606f\u4e2d\u9009\u62e9\u4e00\u4e2a\u5165\u53e3\u5e76\u786e\u8ba4\u3002")
+            return
         if stage == "booking":
-            result = QMessageBox.warning(self, "生成订单阶段", "此步骤可能在目标平台生成一个未支付订单。请只操作到出现付款页，不要输入支付密码或确认支付。", QMessageBox.Ok | QMessageBox.Cancel)
+            result = QMessageBox.warning(self, "\u751f\u6210\u8ba2\u5355\u9636\u6bb5", "\u8bf7\u53ea\u64cd\u4f5c\u5230\u51fa\u73b0\u4ed8\u6b3e\u9875\uff0c\u4e0d\u8981\u786e\u8ba4\u652f\u4ed8\u3002", QMessageBox.Ok | QMessageBox.Cancel)
             if result != QMessageBox.Ok:
                 return
         self.discovery_config["learningStage"] = stage
         if self.discovery_dialog:
             self.discovery_dialog.stage = stage
-            self.discovery_dialog.current.setText("当前阶段：" + label)
+            self.discovery_dialog.current.setText("\u5f53\u524d\u9636\u6bb5\uff1a" + label)
             self.discovery_dialog.set_count(stage, self.discovery_counts.get(stage, 0))
-        self.capture_label.setText("新球场发现 · " + label)
-        self.write_log("发现阶段切换为 " + label)
+        self.capture_label.setText("\u65b0\u7403\u573a\u53d1\u73b0 \u00b7 " + label)
+        self.write_log("\u53d1\u73b0\u9636\u6bb5\u5df2\u5207\u6362\uff1a" + label)
 
     def upload_learning_event(self, stage, event):
         session_id = self.discovery_session
@@ -805,6 +828,8 @@ class CaptureWindow(QMainWindow):
                 return
             response.raise_for_status()
             result = response.json()
+            if result.get("ignored"):
+                return
             self.discovery_counts[stage] = self.discovery_counts.get(stage, 0) + 1
             self.bridge.discovery_count.emit(stage, self.discovery_counts[stage])
             result["stage"] = stage
@@ -836,6 +861,31 @@ class CaptureWindow(QMainWindow):
     def confirm_discovery_candidates(self):
         self.write_log("\u5df2\u786e\u8ba4\u5019\u9009\u4f1a\u8bdd\u4fe1\u606f\uff0c\u8bf7\u7ee7\u7eed\u5b8c\u6574\u8d70\u8ba2\u573a\u6d41\u7a0b")
         self.set_discovery_stage("account", "1. \u8d26\u6237\u9a8c\u8bc1")
+
+    def lock_discovery_entry(self, event_id):
+        session_id = self.discovery_session
+        if not session_id:
+            return
+        payload = {"eventId": event_id}
+        self.write_log("\u6b63\u5728\u9501\u5b9a\u5165\u53e3 URL\u2026")
+        def worker():
+            try:
+                response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/lock-entry", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
+                response.raise_for_status()
+                self.bridge.discovery_locked.emit(response.json().get("scope") or {})
+            except Exception as exc:
+                self.bridge.generic_error.emit("\u9501\u5b9a\u5165\u53e3\u5931\u8d25", str(exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def apply_discovery_locked(self, scope):
+        if not self.discovery_config:
+            return
+        self.discovery_config["learningScope"] = scope.get("origin")
+        self.discovery_config["learningStage"] = "account"
+        if self.discovery_dialog:
+            self.discovery_dialog.set_entry_locked(scope)
+        self.set_discovery_stage("account", "1. \u8d26\u6237\u9a8c\u8bc1")
+        self.write_log("\u5165\u53e3\u5df2\u9501\u5b9a\uff0c\u540e\u7eed\u4ec5\u7b5b\u9009\u540c\u670d\u52a1\u8303\u56f4\u4f1a\u8bdd\u4fe1\u606f")
 
     def apply_discovery_count(self, stage, count):
         if count == -1:

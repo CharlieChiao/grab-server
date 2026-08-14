@@ -208,6 +208,10 @@ class CaptureAddon:
             return
         if request.scheme != "https" or self.is_payment(request.pretty_url):
             return
+        scope = self.config.get("learningScope")
+        origin = request.scheme + "://" + request.host
+        if scope and origin != scope:
+            return
         body = self.parse_json_body(request)
         if self.is_payment(json.dumps(body, ensure_ascii=False) if body is not None else ""):
             return

@@ -34,6 +34,14 @@ ensureUserColumn("nickname", "TEXT");
 ensureUserColumn("avatar_mime", "TEXT");
 ensureUserColumn("avatar_data", "BLOB");
 ensureUserColumn("profile_updated_at", "TEXT");
+function ensureDiscoverySessionColumn(name, definition) {
+  const columns = db.prepare("PRAGMA table_info(venue_discovery_sessions)").all();
+  if (!columns.some((column) => column.name === name)) {
+    db.exec(`ALTER TABLE venue_discovery_sessions ADD COLUMN ${name} ${definition}`);
+  }
+}
+ensureDiscoverySessionColumn("locked_origin", "TEXT");
+ensureDiscoverySessionColumn("locked_path", "TEXT");
 
 export const nowIso = () => new Date().toISOString();
 if (fs.existsSync(legacyJobsFile) && db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n === 0) {

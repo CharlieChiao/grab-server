@@ -13,6 +13,11 @@ function ownedSession(id, userId) {
   return db.prepare("SELECT * FROM venue_discovery_sessions WHERE id=? AND user_id=?").get(id, userId);
 }
 
+function activeSession(id, userId) {
+  const session = ownedSession(id, userId);
+  return session && (session.status === "capturing" || session.status === "locked") ? session : null;
+}
+
 function safeValue(value, depth = 0) {
   if (depth > 7) return "[depth-limit]";
   if (Array.isArray(value)) return value.slice(0, 12).map((item) => safeValue(item, depth + 1));
@@ -134,7 +139,7 @@ function compileManifest(session, rows) {
   return {
     schemaVersion: 1,
     kind: "declarative-http-draft",
-    venue: { name: session.venue_name },
+    venue: { name: session.venue_name, entry: session.locked_origin ? { origin: session.locked_origin, path: session.locked_path } : null },
     apis,
     safety: { arbitraryCode: false, paymentCaptured: false, secretsEncrypted: true },
     missing,
@@ -153,19 +158,22 @@ router.post("/venue-discovery/sessions", (req, res) => {
 });
 
 router.post("/venue-discovery/sessions/:id/events", (req, res) => {
-  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\\u8bbe\\u5907\\u672a\\u914d\\u5bf9" });
-  const session = ownedSession(req.params.id, req.user.id);
-  if (!session || session.status !== "capturing") return res.status(404).json({ error: "\\u53d1\\u73b0\\u4f1a\\u8bdd\\u4e0d\\u5b58\\u5728\\u6216\\u5df2\\u7ed3\\u675f" });
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\u8bbe\u5907\u672a\u914d\u5bf9" });
+  const session = activeSession(req.params.id, req.user.id);
+  if (!session) return res.status(404).json({ error: "\u53d1\u73b0\u4f1a\u8bdd\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u675f" });
   const stage = String(req.body?.stage || "");
   const event = req.body?.event || {};
-  if (!STAGES.has(stage)) return res.status(400).json({ error: "\\u672a\\u77e5\\u5f15\\u5bfc\\u9636\\u6bb5" });
+  if (!STAGES.has(stage)) return res.status(400).json({ error: "\u672a\u77e5\u5f15\u5bfc\u9636\u6bb5" });
   if (PAYMENT_PATTERN.test(String(event.url || "")) || PAYMENT_PATTERN.test(JSON.stringify(event.requestBody || {}))) {
-    return res.status(422).json({ error: "\\u652f\\u4ed8\\u76f8\\u5173\\u5185\\u5bb9\\u4e0d\\u4f1a\\u88ab\\u6536\\u96c6", ignored: true });
+    return res.status(422).json({ error: "\u652f\u4ed8\u76f8\u5173\u5185\u5bb9\u4e0d\u4f1a\u88ab\u6536\u96c6", ignored: true });
   }
   const count = db.prepare("SELECT COUNT(*) AS n FROM venue_discovery_events WHERE session_id=?").get(session.id).n;
-  if (count >= MAX_EVENTS) return res.status(429).json({ error: "\\u672c\\u6b21\\u53d1\\u73b0\\u8bb0\\u5f55\\u5df2\\u8fbe\\u5230\\u4e0a\\u9650" });
+  if (count >= MAX_EVENTS) return res.status(429).json({ error: "\u672c\u6b21\u53d1\u73b0\u8bb0\u5f55\u5df2\u8fbe\u5230\u4e0a\u9650" });
   const endpoint = endpointSummary(event);
-  if (!endpoint) return res.status(400).json({ error: "\\u53ea\\u5141\\u8bb8 HTTPS \\u4f1a\\u8bdd\\u4fe1\\u606f" });
+  if (!endpoint) return res.status(400).json({ error: "\u53ea\u5141\u8bb8 HTTPS \u4f1a\u8bdd\u4fe1\u606f" });
+  if (session.locked_origin && endpoint.baseUrl !== session.locked_origin) {
+    return res.json({ ok: true, ignored: true, reason: "outside-locked-origin" });
+  }
   const existingRows = db.prepare("SELECT safe_json FROM venue_discovery_events WHERE session_id=? ORDER BY id DESC LIMIT 80").all(session.id);
   const candidate = candidateScore(session, event, endpoint, existingRows);
   const safe = {
@@ -189,14 +197,32 @@ router.post("/venue-discovery/sessions/:id/events", (req, res) => {
   res.json({ ok: true, accepted: true, count: count + 1, eventId, endpoint, candidate });
 });
 
-router.post("/venue-discovery/sessions/:id/events/:eventId/annotation", (req, res) => {
-  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\\u8bbe\\u5907\\u672a\\u914d\\u5bf9" });
-  const session = ownedSession(req.params.id, req.user.id);
-  if (!session || session.status !== "capturing") return res.status(404).json({ error: "\\u53d1\\u73b0\\u4f1a\\u8bdd\\u4e0d\\u5b58\\u5728\\u6216\\u5df2\\u7ed3\\u675f" });
-  const row = db.prepare("SELECT id,safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(req.params.eventId, session.id);
-  if (!row) return res.status(404).json({ error: "\\u4f1a\\u8bdd\\u4fe1\\u606f\\u4e0d\\u5b58\\u5728" });
+router.post("/venue-discovery/sessions/:id/lock-entry", (req, res) => {
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\u8bbe\u5907\u672a\u914d\u5bf9" });
+  const session = activeSession(req.params.id, req.user.id);
+  if (!session) return res.status(404).json({ error: "\u53d1\u73b0\u4f1a\u8bdd\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u675f" });
+  if (session.locked_origin) return res.status(409).json({ error: "\u5165\u53e3\u5df2\u9501\u5b9a", lockedOrigin: session.locked_origin, lockedPath: session.locked_path });
+  const eventId = Number(req.body?.eventId);
+  const row = db.prepare("SELECT safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(eventId, session.id);
+  if (!row) return res.status(404).json({ error: "\u5019\u9009\u4f1a\u8bdd\u4fe1\u606f\u4e0d\u5b58\u5728" });
   let safe;
-  try { safe = JSON.parse(row.safe_json); } catch { return res.status(500).json({ error: "\\u4f1a\\u8bdd\\u4fe1\\u606f\\u635f\\u574f" }); }
+  try { safe = JSON.parse(row.safe_json); } catch { return res.status(500).json({ error: "\u4f1a\u8bdd\u4fe1\u606f\u635f\u574f" }); }
+  const endpoint = safe.endpoint;
+  if (!endpoint?.baseUrl || !endpoint?.path) return res.status(422).json({ error: "\u5019\u9009\u5185\u5bb9\u65e0\u6548" });
+  const now = nowIso();
+  db.prepare("UPDATE venue_discovery_sessions SET status='locked',locked_origin=?,locked_path=?,updated_at=? WHERE id=?")
+    .run(endpoint.baseUrl, endpoint.path, now, session.id);
+  res.json({ ok: true, scope: { origin: endpoint.baseUrl, entryPath: endpoint.path } });
+});
+
+router.post("/venue-discovery/sessions/:id/events/:eventId/annotation", (req, res) => {
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\u8bbe\u5907\u672a\u914d\u5bf9" });
+  const session = activeSession(req.params.id, req.user.id);
+  if (!session) return res.status(404).json({ error: "\u53d1\u73b0\u4f1a\u8bdd\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u675f" });
+  const row = db.prepare("SELECT id,safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(req.params.eventId, session.id);
+  if (!row) return res.status(404).json({ error: "\u4f1a\u8bdd\u4fe1\u606f\u4e0d\u5b58\u5728" });
+  let safe;
+  try { safe = JSON.parse(row.safe_json); } catch { return res.status(500).json({ error: "\u4f1a\u8bdd\u4fe1\u606f\u635f\u574f" }); }
   const input = req.body || {};
   safe.annotation = {
     selected: input.selected !== false,
