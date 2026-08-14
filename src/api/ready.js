@@ -44,7 +44,7 @@ router.post("/venues/:id/discover-capture", (req, res) => {
   if (!credentialUpdateAllowed(req)) return res.status(401).json({ error: "credential update token invalid" });
   if (typeof venue.discoverCapture !== "function") return res.status(501).json({ error: "venue discovery is not supported" });
   const submittedCourts = Array.isArray(req.body?.courts) ? req.body.courts : null;
-  const discovered = submittedCourts ? { courts: submittedCourts.map((court) => ({ providerCourtId: String(court.providerCourtId || ""), name: String(court.name || "").slice(0, 100) })).filter((court) => /^\\d{6,}$/.test(court.providerCourtId)) } : venue.discoverCapture(req.body || {});
+  const discovered = submittedCourts ? { courts: submittedCourts.map((court) => ({ providerCourtId: String(court.providerCourtId || ""), name: String(court.name || "").slice(0, 100) })).filter((court) => /^\d{6,}$/.test(court.providerCourtId)) } : venue.discoverCapture(req.body || {});
   const now = nowIso();
   const findExisting = db.prepare("SELECT court_id FROM venue_catalog WHERE venue_id=? AND provider_id=?");
   const insert = db.prepare("INSERT INTO venue_catalog(venue_id,court_id,provider_id,name,type,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(venue_id,provider_id) DO UPDATE SET name=excluded.name,type=excluded.type,updated_at=excluded.updated_at");
