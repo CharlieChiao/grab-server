@@ -35,8 +35,12 @@ releaseRetry:
   maxAttempts: 8
   calibration:
     endpoint: slots-history
-    samples: 6
-    minIntervalMs: 1000
+    initialIntervalMs: 3000
+    decreaseStepMs: 250
+    minProbeIntervalMs: 250
+    precisionMs: 50
+    maxProbes: 24
+    cooldownMs: 10000
 courts:
   - name: 匹克球1号
     type: pickle

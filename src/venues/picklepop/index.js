@@ -103,7 +103,7 @@ export const meta = {
 export const riskProfile = {
   scopeKey: "pospal:store:5972810",
   mode: "serial-linear-backoff",
-  calibration: { samples: Number(releaseRetry.calibration?.samples || 6), decreaseStepMs: 250, minIntervalMs: Number(releaseRetry.calibration?.minIntervalMs || 1000), blackoutMinutes: 30 },
+  calibration: { ...releaseRetry.calibration, blackoutMinutes: Number(releaseRetry.calibration?.blackoutMinutes || 30) },
   booking: {
     minIntervalMs: Number(releaseRetry.defaultMinIntervalMs || 3000),
     jitterMs: Number(releaseRetry.jitterMs || 300),
