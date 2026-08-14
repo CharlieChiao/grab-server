@@ -28,6 +28,15 @@ bookingHours:
   overnight: true
   slotMinutes: 60
   slotEndOffsetMinutes: -1
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 3000
+  jitterMs: 300
+  maxAttempts: 8
+  calibration:
+    endpoint: slots-history
+    samples: 6
+    minIntervalMs: 1000
 courts:
   - name: 匹克球1号
     type: pickle

@@ -77,6 +77,7 @@ async function post(path_, cred, payload, timeoutMs = 12000) {
 const uidByName = Object.fromEntries(cfg.courts.map((c) => [c.name, c.uid]));
 const slotMinutes = Math.max(1, Number((cfg.bookingHours || {}).slotMinutes) || 60);
 const slotEndOffsetMinutes = Number((cfg.bookingHours || {}).slotEndOffsetMinutes) || 0;
+const releaseRetry = cfg.releaseRetry || {};
 
 function addMinutes(date, time, minutes) {
   const [year, month, day] = String(date).split("-").map(Number);
@@ -102,10 +103,10 @@ export const meta = {
 export const riskProfile = {
   scopeKey: "pospal:store:5972810",
   mode: "serial-linear-backoff",
-  calibration: { samples: 6, decreaseStepMs: 250, minIntervalMs: 1000, blackoutMinutes: 30 },
+  calibration: { samples: Number(releaseRetry.calibration?.samples || 6), decreaseStepMs: 250, minIntervalMs: Number(releaseRetry.calibration?.minIntervalMs || 1000), blackoutMinutes: 30 },
   booking: {
-    minIntervalMs: 3000,
-    jitterMs: 800,
+    minIntervalMs: Number(releaseRetry.defaultMinIntervalMs || 3000),
+    jitterMs: Number(releaseRetry.jitterMs || 300),
     cooldownMs: 10000,
     maxRetry: 40,
     notReleasedIntervalMs: 3000,
