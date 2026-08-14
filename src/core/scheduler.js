@@ -151,19 +151,22 @@ async function runGrab(job, credArg, venueArg) {
   }
   const cred = credArg || getCredential(job.venueId, job.userId);
   if (job.fireAt) {
+    let released = false;
+    let checkError = null;
     try {
-      if (!(await targetIsReleased(venue, job.target, cred))) {
-        const retryAt = new Date(Date.now() + 60 * 1000).toISOString();
-        updateJob(job.id, { status: "pending", fireAt: retryAt, result: { message: "尚未放场，继续等待", retryAt } });
-        scheduled.delete(job.id);
-        console.log(`[grab] job ${job.id} 尚未放场，延后至 ${retryAt}`);
-        return;
-      }
+      released = await targetIsReleased(venue, job.target, cred);
     } catch (error) {
-      console.warn(`[grab] job ${job.id} 放场检测异常，按原计划继续: ${error.message || error}`);
+      checkError = error;
     }
-  }
-  let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
+    if (!released) {
+      const retryAt = new Date(Date.now() + 5 * 1000).toISOString();
+      const message = checkError ? "放场检测超时，继续等待" : "尚未放场，继续等待";
+      updateJob(job.id, { status: "pending", fireAt: retryAt, result: { message, retryAt } });
+      scheduled.delete(job.id);
+      console.warn(`[grab] job ${job.id} ${message}，延后至 ${retryAt}${checkError ? `: ${checkError.message || checkError}` : ""}`);
+      return;
+    }
+  }  let profile = getRiskProfile(job.venueId, venue.riskProfile || {});
   const MAX_RETRY = Math.min(10, Number((job.target.ext && job.target.ext.maxRetry) || profile.booking.maxRetry));
 
   // 棣栧彂鍓嶅啀棰勬瀯寤轰竴娆?鑰楁椂 <1ms), 淇濊瘉鍑瘉鏄渶鏂扮殑
