@@ -202,13 +202,16 @@ router.post("/venue-discovery/sessions/:id/lock-entry", (req, res) => {
   const session = activeSession(req.params.id, req.user.id);
   if (!session) return res.status(404).json({ error: "\u53d1\u73b0\u4f1a\u8bdd\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u675f" });
   if (session.locked_origin) return res.status(409).json({ error: "\u5165\u53e3\u5df2\u9501\u5b9a", lockedOrigin: session.locked_origin, lockedPath: session.locked_path });
-  const eventId = Number(req.body?.eventId);
-  const row = db.prepare("SELECT safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(eventId, session.id);
-  if (!row) return res.status(404).json({ error: "\u5019\u9009\u4f1a\u8bdd\u4fe1\u606f\u4e0d\u5b58\u5728" });
-  let safe;
-  try { safe = JSON.parse(row.safe_json); } catch { return res.status(500).json({ error: "\u4f1a\u8bdd\u4fe1\u606f\u635f\u574f" }); }
-  const endpoint = safe.endpoint;
-  if (!endpoint?.baseUrl || !endpoint?.path) return res.status(422).json({ error: "\u5019\u9009\u5185\u5bb9\u65e0\u6548" });
+  const submitted = req.body?.endpoint;
+  let endpoint = null;
+  if (submitted && typeof submitted === "object") {
+    endpoint = { method: String(submitted.method || "GET").toUpperCase(), baseUrl: String(submitted.baseUrl || ""), path: String(submitted.path || "") };
+  } else {
+    const eventId = Number(req.body?.eventId);
+    const row = db.prepare("SELECT safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(eventId, session.id);
+    if (row) { try { endpoint = JSON.parse(row.safe_json).endpoint; } catch {} }
+  }
+  if (!endpoint?.baseUrl || !endpoint?.path || !/^https:\/\//.test(endpoint.baseUrl) || !endpoint.path.startsWith("/")) return res.status(422).json({ error: "\u5019\u9009\u5185\u5bb9\u65e0\u6548" });
   const now = nowIso();
   db.prepare("UPDATE venue_discovery_sessions SET status='locked',locked_origin=?,locked_path=?,updated_at=? WHERE id=?")
     .run(endpoint.baseUrl, endpoint.path, now, session.id);

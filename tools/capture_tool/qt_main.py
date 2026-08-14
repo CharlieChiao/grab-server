@@ -3,6 +3,7 @@ import json
 import queue
 import sys
 import threading
+from urllib.parse import urlsplit
 from datetime import datetime
 
 import qrcode
@@ -780,6 +781,10 @@ class CaptureWindow(QMainWindow):
         self.discovery_counts = {"account": 0, "courts": 0, "slots": 0, "booking": 0}
         self.discovery_uploads = 0
         self.discovery_config = {"learningMode": True, "learningStage": "entry", "learningScope": None}
+        self.discovery_venue_name = venue_name.strip()
+        self.discovery_entry_candidates = {}
+        self.discovery_entry_domains = {}
+        self.discovery_entry_seen = set()
         self.port = find_free_port()
         self.controller = ProxyController(self.discovery_config, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
@@ -814,6 +819,33 @@ class CaptureWindow(QMainWindow):
             self.discovery_dialog.set_count(stage, self.discovery_counts.get(stage, 0))
         self.capture_label.setText("\u65b0\u7403\u573a\u53d1\u73b0 \u00b7 " + label)
         self.write_log("\u53d1\u73b0\u9636\u6bb5\u5df2\u5207\u6362\uff1a" + label)
+
+    def add_local_entry_candidate(self, event):
+        try:
+            parsed = urlsplit(str(event.get("url") or ""))
+            if parsed.scheme != "https" or not parsed.netloc:
+                return
+            endpoint = {"method": str(event.get("method") or "GET").upper(), "baseUrl": parsed.scheme + "://" + parsed.netloc, "path": parsed.path or "/"}
+        except Exception:
+            return
+        key = endpoint["method"] + " " + endpoint["baseUrl"] + endpoint["path"]
+        if key in self.discovery_entry_seen:
+            return
+        self.discovery_entry_seen.add(key)
+        text = json.dumps(event, ensure_ascii=False).lower().replace(" ", "")
+        venue = str(getattr(self, "discovery_venue_name", "")).lower().replace(" ", "")
+        domain_count = self.discovery_entry_domains.get(endpoint["baseUrl"], 0)
+        name_matched = bool(venue and venue in text)
+        if name_matched:
+            self.discovery_entry_domains[endpoint["baseUrl"]] = domain_count + 1
+            domain_count += 1
+        if not name_matched and domain_count == 0:
+            return
+        event_id = len(self.discovery_entry_candidates) + 1
+        item = {"eventId": event_id, "endpoint": endpoint, "candidate": {"score": (100 if name_matched else 0) + domain_count * 8, "nameMatched": name_matched, "domainCount": domain_count}}
+        self.discovery_entry_candidates[event_id] = item
+        self.bridge.discovery_candidate.emit(item)
+        self.write_log("\\u5df2\\u5728\\u672c\\u673a\\u6574\\u7406\\u5165\\u53e3\\u5019\\u9009\uff1a" + key)
 
     def upload_learning_event(self, stage, event):
         session_id = self.discovery_session
@@ -866,7 +898,11 @@ class CaptureWindow(QMainWindow):
         session_id = self.discovery_session
         if not session_id:
             return
-        payload = {"eventId": event_id}
+        endpoint = (self.discovery_entry_candidates.get(event_id) or {}).get("endpoint")
+        if not endpoint:
+            self.bridge.generic_error.emit("\u9501\u5b9a\u5165\u53e3\u5931\u8d25", "\u672a\u627e\u5230\u672c\u5730\u5019\u9009\u5185\u5bb9\u3002")
+            return
+        payload = {"endpoint": endpoint}
         self.write_log("\u6b63\u5728\u9501\u5b9a\u5165\u53e3 URL\u2026")
         def worker():
             try:
@@ -966,8 +1002,12 @@ class CaptureWindow(QMainWindow):
                         self.write_log("检测到：" + item.get("host", "") + item.get("path", ""))
                 elif kind == "learning":
                     stage = item.get("stage") or "account"
-                    self.discovery_uploads += 1
-                    threading.Thread(target=self.upload_learning_event, args=(stage, item.get("event") or {}), daemon=True).start()
+                    event = item.get("event") or {}
+                    if stage == "entry":
+                        self.add_local_entry_candidate(event)
+                    else:
+                        self.discovery_uploads += 1
+                        threading.Thread(target=self.upload_learning_event, args=(stage, event), daemon=True).start()
                 elif kind == "discovery":
                     threading.Thread(target=self.upload_discovered_courts, args=(item.get("courts") or [],), daemon=True).start()
                 elif kind == "credential":
