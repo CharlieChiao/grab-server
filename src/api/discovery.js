@@ -65,26 +65,69 @@ function endpointSummary(event) {
   };
 }
 
+function keywordTokens(name) {
+  const input = String(name || "").toLowerCase();
+  const compact = input.replace(/\s+/g, "");
+  const words = input.split(/[\s\\-_/]+/).filter((word) => word.length >= 2);
+  return [...new Set([compact, ...words].filter(Boolean))];
+}
+
+function baseDomain(baseUrl) {
+  try {
+    const parts = new URL(baseUrl).hostname.toLowerCase().split(".");
+    const suffix = parts.slice(-2).join(".");
+    const multiPart = new Set(["com.cn", "net.cn", "org.cn", "gov.cn", "co.uk"]);
+    return multiPart.has(suffix) && parts.length >= 3 ? parts.slice(-3).join(".") : suffix;
+  } catch { return ""; }
+}
+
+function candidateScore(session, event, endpoint, existingRows) {
+  const sessionText = JSON.stringify({
+    url: event.url,
+    request: safeValue(event.requestBody || {}),
+    response: safeValue(event.responseBody || {}),
+  }).toLowerCase().replace(/\s+/g, "");
+  const tokens = keywordTokens(session.venue_name);
+  const nameHits = tokens.filter((token) => sessionText.includes(token)).length;
+  const domain = baseDomain(endpoint.baseUrl);
+  const domainCount = existingRows.filter((row) => {
+    try { return baseDomain(JSON.parse(row.safe_json)?.endpoint?.baseUrl) === domain; } catch { return false; }
+  }).length;
+  return {
+    score: nameHits * 100 + Math.min(domainCount, 20) * 8 + (endpoint.statusCode && endpoint.statusCode < 400 ? 2 : 0),
+    nameMatched: nameHits > 0,
+    domain,
+    domainCount,
+  };
+}
+
 function compileManifest(session, rows) {
   const apis = {};
   const score = (stage, item) => {
     const endpoint = item?.endpoint || {};
     const haystack = JSON.stringify(endpoint).toLowerCase();
-    let value = endpoint.statusCode && endpoint.statusCode < 400 ? 2 : 0;
+    let value = Number(item?.candidate?.score || 0) + (endpoint.statusCode && endpoint.statusCode < 400 ? 2 : 0);
     if (stage === "account") value += (haystack.match(/login|member|account|customer|balance|phone|profile/g) || []).length * 3;
-    if (stage === "courts") value += (haystack.match(/court|classroom|venue|project|stadium|field|场地|球场/g) || []).length * 3;
-    if (stage === "slots") value += (haystack.match(/slot|schedule|appoint|datetime|begin|end|price|cost|时段|价格/g) || []).length * 3;
+    if (stage === "courts") value += (haystack.match(/court|classroom|venue|project|stadium|field/g) || []).length * 3;
+    if (stage === "slots") value += (haystack.match(/slot|schedule|appoint|datetime|begin|end|price|cost/g) || []).length * 3;
     if (stage === "booking") {
       value += endpoint.method === "POST" ? 5 : 0;
-      value += (haystack.match(/save|create|submit|booking|appointment|order|reserve|预约|下单/g) || []).length * 4;
-      if (/payment|pay|cashier|支付/.test(haystack)) value -= 100;
+      value += (haystack.match(/save|create|submit|booking|appointment|order|reserve/g) || []).length * 4;
+      if (/payment|pay|cashier/.test(haystack)) value -= 100;
     }
     return value;
   };
   for (const stage of STAGES) {
-    const candidates = rows.filter((row) => row.stage === stage).map((row) => JSON.parse(row.safe_json));
+    const candidates = rows.filter((row) => row.stage === stage).map((row) => JSON.parse(row.safe_json)).filter((item) => item.annotation?.selected !== false);
     const candidate = candidates.sort((a, b) => score(stage, b) - score(stage, a))[0];
-    if (candidate) apis[stage] = { ...candidate.endpoint, confidenceScore: score(stage, candidate) };
+    if (candidate) apis[stage] = {
+      ...candidate.endpoint,
+      confidenceScore: score(stage, candidate),
+      label: candidate.annotation?.label || null,
+      tags: candidate.annotation?.tags || [],
+      note: candidate.annotation?.note || null,
+      relevance: candidate.candidate?.score || 0,
+    };
   }
   const required = ["account", "courts", "slots", "booking"];
   const missing = required.filter((stage) => !apis[stage]);
@@ -110,20 +153,27 @@ router.post("/venue-discovery/sessions", (req, res) => {
 });
 
 router.post("/venue-discovery/sessions/:id/events", (req, res) => {
-  if (!req.deviceAuthenticated) return res.status(403).json({ error: "设备未配对" });
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\\u8bbe\\u5907\\u672a\\u914d\\u5bf9" });
   const session = ownedSession(req.params.id, req.user.id);
-  if (!session || session.status !== "capturing") return res.status(404).json({ error: "发现会话不存在或已结束" });
+  if (!session || session.status !== "capturing") return res.status(404).json({ error: "\\u53d1\\u73b0\\u4f1a\\u8bdd\\u4e0d\\u5b58\\u5728\\u6216\\u5df2\\u7ed3\\u675f" });
   const stage = String(req.body?.stage || "");
   const event = req.body?.event || {};
-  if (!STAGES.has(stage)) return res.status(400).json({ error: "未知引导阶段" });
+  if (!STAGES.has(stage)) return res.status(400).json({ error: "\\u672a\\u77e5\\u5f15\\u5bfc\\u9636\\u6bb5" });
   if (PAYMENT_PATTERN.test(String(event.url || "")) || PAYMENT_PATTERN.test(JSON.stringify(event.requestBody || {}))) {
-    return res.status(422).json({ error: "支付接口和支付参数不会被采集", ignored: true });
+    return res.status(422).json({ error: "\\u652f\\u4ed8\\u76f8\\u5173\\u5185\\u5bb9\\u4e0d\\u4f1a\\u88ab\\u6536\\u96c6", ignored: true });
   }
   const count = db.prepare("SELECT COUNT(*) AS n FROM venue_discovery_events WHERE session_id=?").get(session.id).n;
-  if (count >= MAX_EVENTS) return res.status(429).json({ error: "本次发现记录已达到上限" });
+  if (count >= MAX_EVENTS) return res.status(429).json({ error: "\\u672c\\u6b21\\u53d1\\u73b0\\u8bb0\\u5f55\\u5df2\\u8fbe\\u5230\\u4e0a\\u9650" });
   const endpoint = endpointSummary(event);
-  if (!endpoint) return res.status(400).json({ error: "只允许采集 HTTPS 接口" });
-  const safe = { endpoint, capturedAt: nowIso() };
+  if (!endpoint) return res.status(400).json({ error: "\\u53ea\\u5141\\u8bb8 HTTPS \\u4f1a\\u8bdd\\u4fe1\\u606f" });
+  const existingRows = db.prepare("SELECT safe_json FROM venue_discovery_events WHERE session_id=? ORDER BY id DESC LIMIT 80").all(session.id);
+  const candidate = candidateScore(session, event, endpoint, existingRows);
+  const safe = {
+    endpoint,
+    capturedAt: nowIso(),
+    candidate,
+    annotation: { selected: candidate.nameMatched, label: "", tags: [], note: "" },
+  };
   const encryptedPayload = encrypt({
     method: event.method,
     url: event.url,
@@ -134,8 +184,30 @@ router.post("/venue-discovery/sessions/:id/events", (req, res) => {
   const now = nowIso();
   db.prepare("INSERT INTO venue_discovery_events(session_id,stage,safe_json,encrypted_payload,created_at) VALUES(?,?,?,?,?)")
     .run(session.id, stage, JSON.stringify(safe), encryptedPayload, now);
+  const eventId = db.prepare("SELECT last_insert_rowid() AS id").get().id;
   db.prepare("UPDATE venue_discovery_sessions SET updated_at=? WHERE id=?").run(now, session.id);
-  res.json({ ok: true, accepted: true, count: count + 1, endpoint });
+  res.json({ ok: true, accepted: true, count: count + 1, eventId, endpoint, candidate });
+});
+
+router.post("/venue-discovery/sessions/:id/events/:eventId/annotation", (req, res) => {
+  if (!req.deviceAuthenticated) return res.status(403).json({ error: "\\u8bbe\\u5907\\u672a\\u914d\\u5bf9" });
+  const session = ownedSession(req.params.id, req.user.id);
+  if (!session || session.status !== "capturing") return res.status(404).json({ error: "\\u53d1\\u73b0\\u4f1a\\u8bdd\\u4e0d\\u5b58\\u5728\\u6216\\u5df2\\u7ed3\\u675f" });
+  const row = db.prepare("SELECT id,safe_json FROM venue_discovery_events WHERE id=? AND session_id=?").get(req.params.eventId, session.id);
+  if (!row) return res.status(404).json({ error: "\\u4f1a\\u8bdd\\u4fe1\\u606f\\u4e0d\\u5b58\\u5728" });
+  let safe;
+  try { safe = JSON.parse(row.safe_json); } catch { return res.status(500).json({ error: "\\u4f1a\\u8bdd\\u4fe1\\u606f\\u635f\\u574f" }); }
+  const input = req.body || {};
+  safe.annotation = {
+    selected: input.selected !== false,
+    label: String(input.label || "").trim().slice(0, 80),
+    tags: Array.isArray(input.tags) ? input.tags.map((value) => String(value).trim().slice(0, 32)).filter(Boolean).slice(0, 12) : [],
+    note: String(input.note || "").trim().slice(0, 240),
+  };
+  const now = nowIso();
+  db.prepare("UPDATE venue_discovery_events SET safe_json=? WHERE id=?").run(JSON.stringify(safe), row.id);
+  db.prepare("UPDATE venue_discovery_sessions SET updated_at=? WHERE id=?").run(now, session.id);
+  res.json({ ok: true, item: safe });
 });
 
 router.post("/venue-discovery/sessions/:id/finalize", (req, res) => {

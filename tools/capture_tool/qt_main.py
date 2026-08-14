@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QCheckBox,
+    QLineEdit,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -77,6 +79,7 @@ class Bridge(QObject):
     discovery_finished = Signal(object)
     generic_error = Signal(str, str)
     pairing = Signal(object)
+    discovery_candidate = Signal(object)
 
 
 class StatusDot(QLabel):
@@ -185,51 +188,71 @@ class DiscoveryDialog(QDialog):
     stage_selected = Signal(str, str)
     finalize_requested = Signal()
     cancel_requested = Signal()
+    candidate_changed = Signal(int, bool, str, str, str)
+    candidates_confirmed = Signal()
 
     STAGES = [
-        ("account", "1", "账户验证", "打开目标小程序的“我的、余额或会员”页面"),
-        ("courts", "2", "场地列表", "打开项目、场馆或场地选择页面"),
-        ("slots", "3", "时段价格", "选择日期，打开可预约时段和价格页面"),
-        ("booking", "4", "生成订单", "操作到出现付款页，然后立即停下"),
+        ("account", "1", "\\u8d26\\u6237\\u9a8c\\u8bc1", "\\u6253\\u5f00\\u76ee\\u6807\\u5c0f\\u7a0b\\u5e8f\\u7684\\u201c\\u6211\\u7684\\u3001\\u4f59\\u989d\\u6216\\u4f1a\\u5458\\u201d\\u9875\\u9762"),
+        ("courts", "2", "\\u573a\\u5730\\u5217\\u8868", "\\u6253\\u5f00\\u9879\\u76ee\\u3001\\u573a\\u9986\\u6216\\u573a\\u5730\\u9009\\u62e9\\u9875\\u9762"),
+        ("slots", "3", "\\u65f6\\u6bb5\\u4ef7\\u683c", "\\u9009\\u62e9\\u65e5\\u671f\\uff0c\\u6253\\u5f00\\u53ef\\u9884\\u7ea6\\u65f6\\u6bb5\\u548c\\u4ef7\\u683c\\u9875\\u9762"),
+        ("booking", "4", "\\u751f\\u6210\\u8ba2\\u5355", "\\u64cd\\u4f5c\\u5230\\u51fa\\u73b0\\u4ed8\\u6b3e\\u9875\\uff0c\\u7136\\u540e\\u7acb\\u5373\\u505c\\u4e0b"),
     ]
 
     def __init__(self, venue_name, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("新球场发现")
-        self.setMinimumSize(680, 590)
+        self.setWindowTitle("\\u65b0\\u7403\\u573a\\u53d1\\u73b0")
+        self.setMinimumSize(720, 760)
         self.setModal(False)
         self.stage = "account"
+        self.candidate_cards = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 26, 28, 24)
-        root.setSpacing(16)
-        title = QLabel("发现新球场")
+        root.setSpacing(12)
+        title = QLabel("\\u53d1\\u73b0\\u65b0\\u7403\\u573a")
         title.setObjectName("dialogTitle")
-        subtitle = QLabel(f"{venue_name} · 按顺序切换阶段后再操作目标小程序")
+        subtitle = QLabel(f"{venue_name} \\u00b7 \\u5148\\u4ece\\u4f1a\\u8bdd\\u4fe1\\u606f\\u4e2d\\u786e\\u8ba4\\u5019\\u9009\\uff0c\\u518d\\u6309\\u6b65\\u9aa4\\u5b8c\\u6574\\u8d70\\u8ba2\\u573a\\u6d41\\u7a0b")
         subtitle.setObjectName("muted")
         root.addWidget(title)
         root.addWidget(subtitle)
-
-        warning = QLabel("安全提示：不要输入支付密码，也不要确认微信支付。最后一步只到出现付款页；支付接口和支付参数会被自动丢弃。")
+        warning = QLabel("\\u5b89\\u5168\\u63d0\\u793a\\uff1a\\u4e0d\\u8981\\u8f93\\u5165\\u652f\\u4ed8\\u5bc6\\u7801\\uff0c\\u4e5f\\u4e0d\\u8981\\u786e\\u8ba4\\u5fae\\u4fe1\\u652f\\u4ed8\\u3002\\u6700\\u540e\\u4e00\\u6b65\\u53ea\\u5230\\u51fa\\u73b0\\u4ed8\\u6b3e\\u9875\\uff1b\\u652f\\u4ed8\\u76f8\\u5173\\u5185\\u5bb9\\u4f1a\\u88ab\\u81ea\\u52a8\\u4e22\\u5f03\\u3002")
         warning.setObjectName("warningBox")
         warning.setWordWrap(True)
         root.addWidget(warning)
-
-        self.current = QLabel("当前阶段：1. 账户验证")
+        self.current = QLabel("\\u5f53\\u524d\\u9636\\u6bb5\\uff1a1. \\u8d26\\u6237\\u9a8c\\u8bc1")
         self.current.setObjectName("sectionTitle")
-        self.counter = QLabel("已安全采集 0 条接口")
+        self.counter = QLabel("\\u5df2\\u6574\\u7406 0 \\u6761\\u4f1a\\u8bdd\\u4fe1\\u606f")
         self.counter.setObjectName("muted")
         root.addWidget(self.current)
         root.addWidget(self.counter)
-
-        self.stage_buttons = {}
+        candidate_title = QLabel("\\u5019\\u9009\\u4f1a\\u8bdd\\u4fe1\\u606f")
+        candidate_title.setObjectName("sectionTitle")
+        self.candidate_hint = QLabel("\\u5217\\u8868\\u6682\\u65f6\\u4e3a\\u7a7a\\uff1b\\u64cd\\u4f5c\\u76ee\\u6807\\u5c0f\\u7a0b\\u5e8f\\u540e\\uff0c\\u4f1a\\u6309\\u7403\\u573a\\u540d\\u6587\\u5b57\\u5339\\u914d\\u548c\\u540c\\u57df\\u5173\\u8054\\u5ea6\\u6392\\u5e8f\\u51fa\\u73b0\\u3002")
+        self.candidate_hint.setObjectName("muted")
+        self.candidate_hint.setWordWrap(True)
+        root.addWidget(candidate_title)
+        root.addWidget(self.candidate_hint)
+        self.candidate_scroll = QScrollArea()
+        self.candidate_scroll.setWidgetResizable(True)
+        self.candidate_scroll.setMinimumHeight(180)
+        self.candidate_holder = QWidget()
+        self.candidate_layout = QVBoxLayout(self.candidate_holder)
+        self.candidate_layout.setContentsMargins(2, 2, 2, 2)
+        self.candidate_layout.setSpacing(8)
+        self.candidate_layout.addStretch(1)
+        self.candidate_scroll.setWidget(self.candidate_holder)
+        root.addWidget(self.candidate_scroll)
+        confirm = QPushButton("\\u786e\\u8ba4\\u5019\\u9009\\uff0c\\u5f00\\u59cb\\u5b8c\\u6574\\u8ba2\\u573a\\u6d41\\u7a0b")
+        confirm.setObjectName("secondaryButton")
+        confirm.clicked.connect(self.confirm_candidates)
+        root.addWidget(confirm)
         for key, number, label, instruction in self.STAGES:
             card = QFrame()
             card.setObjectName("stepCard")
             row = QHBoxLayout(card)
-            row.setContentsMargins(16, 13, 16, 13)
+            row.setContentsMargins(16, 10, 16, 10)
             number_label = QLabel(number)
             number_label.setObjectName("stepNumber")
-            number_label.setFixedSize(32, 32)
+            number_label.setFixedSize(30, 30)
             number_label.setAlignment(Qt.AlignCenter)
             row.addWidget(number_label)
             copy = QVBoxLayout()
@@ -241,18 +264,15 @@ class DiscoveryDialog(QDialog):
             copy.addWidget(step_title)
             copy.addWidget(step_subtitle)
             row.addLayout(copy, 1)
-            button = QPushButton("切换")
+            button = QPushButton("\\u5207\\u6362")
             button.setObjectName("secondaryButton")
             button.clicked.connect(lambda _=False, k=key, l=f"{number}. {label}": self.select_stage(k, l))
-            self.stage_buttons[key] = button
             row.addWidget(button)
             root.addWidget(card)
-
-        root.addStretch(1)
         actions = QHBoxLayout()
-        cancel = QPushButton("取消发现")
+        cancel = QPushButton("\\u53d6\\u6d88\\u53d1\\u73b0")
         cancel.setObjectName("secondaryButton")
-        finish = QPushButton("完成采集并生成草稿")
+        finish = QPushButton("\\u5b8c\\u6210\\u5e76\\u751f\\u6210\\u8349\\u7a3f")
         finish.setObjectName("primaryButton")
         cancel.clicked.connect(self.cancel_requested.emit)
         finish.clicked.connect(self.finalize_requested.emit)
@@ -260,6 +280,66 @@ class DiscoveryDialog(QDialog):
         actions.addStretch(1)
         actions.addWidget(finish)
         root.addLayout(actions)
+
+    def add_candidate(self, item):
+        event_id = int(item.get("eventId") or 0)
+        if not event_id or event_id in self.candidate_cards:
+            return
+        endpoint = item.get("endpoint") or {}
+        relevance = item.get("candidate") or {}
+        selected = bool(relevance.get("nameMatched"))
+        card = QFrame()
+        card.setObjectName("stepCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 11, 14, 11)
+        layout.setSpacing(6)
+        top = QHBoxLayout()
+        checkbox = QCheckBox("\\u7eb3\\u5165\\u8349\\u7a3f")
+        checkbox.setChecked(selected)
+        top.addWidget(checkbox)
+        top.addStretch(1)
+        score = QLabel(f"\\u76f8\\u5173\\u5ea6 {relevance.get('score', 0)}")
+        score.setObjectName("muted")
+        top.addWidget(score)
+        layout.addLayout(top)
+        path = QLabel(f"{endpoint.get('method', 'GET')}  {endpoint.get('baseUrl', '')}{endpoint.get('path', '')}")
+        path.setObjectName("stepTitle")
+        path.setWordWrap(True)
+        layout.addWidget(path)
+        context = []
+        if relevance.get("nameMatched"): context.append("\\u7403\\u573a\\u540d\\u6587\\u5b57\\u5339\\u914d")
+        if relevance.get("domainCount"): context.append(f"\\u540c\\u57df\\u5173\\u8054 {relevance.get('domainCount')} \\u6761")
+        context_label = QLabel(" \\u00b7 ".join(context) or "\\u5f85\\u4f60\\u786e\\u8ba4")
+        context_label.setObjectName("muted")
+        layout.addWidget(context_label)
+        label_input = QLineEdit()
+        label_input.setPlaceholderText("\\u81ea\\u5b9a\\u4e49\\u540d\\u79f0\\uff08\\u4f8b\\uff1a\\u65f6\\u6bb5\\u67e5\\u8be2\\uff09")
+        tags_input = QLineEdit()
+        tags_input.setPlaceholderText("\\u6807\\u7b7e\\uff0c\\u7528\\u9017\\u53f7\\u5206\\u9694\\uff08\\u4f8b\\uff1aslots, price\\uff09")
+        note_input = QLineEdit()
+        note_input.setPlaceholderText("\\u5907\\u6ce8\\uff08\\u9009\\u586b\\uff09")
+        layout.addWidget(label_input)
+        layout.addWidget(tags_input)
+        layout.addWidget(note_input)
+        def save():
+            self.candidate_changed.emit(event_id, checkbox.isChecked(), label_input.text(), tags_input.text(), note_input.text())
+        checkbox.toggled.connect(lambda _checked: save())
+        label_input.editingFinished.connect(save)
+        tags_input.editingFinished.connect(save)
+        note_input.editingFinished.connect(save)
+        insert_at = 0
+        score_value = int(relevance.get("score") or 0)
+        for other_id, other in self.candidate_cards.items():
+            if score_value > other["score"]:
+                break
+            insert_at += 1
+        self.candidate_layout.insertWidget(insert_at, card)
+        self.candidate_cards[event_id] = {"card": card, "score": score_value}
+        self.candidate_hint.setText("\\u5df2\\u51fa\\u73b0\\u5019\\u9009\\u4f1a\\u8bdd\\u4fe1\\u606f\\u3002\\u53ef\\u52fe\\u9009\\u7eb3\\u5165\\u8349\\u7a3f\\uff0c\\u5e76\\u4e3a\\u540e\\u7eed\\u914d\\u7f6e\\u586b\\u5199\\u540d\\u79f0\\u3001\\u6807\\u7b7e\\u548c\\u5907\\u6ce8\\u3002")
+
+    def confirm_candidates(self):
+        self.candidates_confirmed.emit()
+        self.candidate_hint.setText("\\u5019\\u9009\\u5df2\\u786e\\u8ba4\\u3002\\u73b0\\u5728\\u8bf7\\u4f9d\\u6b21\\u5207\\u6362\\u4e0b\\u65b9\\u9636\\u6bb5\\uff0c\\u5b8c\\u6574\\u8d70\\u5230\\u4ed8\\u6b3e\\u9875\\u4e4b\\u524d\\u5373\\u53ef\\u3002")
 
     def select_stage(self, key, label):
         self.stage_selected.emit(key, label)
@@ -270,7 +350,7 @@ class DiscoveryDialog(QDialog):
 
     def set_count(self, stage, count):
         if stage == self.stage:
-            self.counter.setText(f"已安全采集 {count} 条接口")
+            self.counter.setText(f"\\u5df2\\u6574\\u7406 {count} \\u6761\\u4f1a\\u8bdd\\u4fe1\\u606f")
 
 
 class CaptureWindow(QMainWindow):
@@ -315,6 +395,7 @@ class CaptureWindow(QMainWindow):
         self.bridge.discovery_finished.connect(self.apply_discovery_finished)
         self.bridge.generic_error.connect(lambda title, detail: QMessageBox.critical(self, title, detail))
         self.bridge.pairing.connect(self.apply_pairing)
+        self.bridge.discovery_candidate.connect(self.add_discovery_candidate)
 
     def card(self, object_name=None):
         frame = QFrame()
@@ -692,6 +773,8 @@ class CaptureWindow(QMainWindow):
         self.discovery_dialog.stage_selected.connect(self.set_discovery_stage)
         self.discovery_dialog.finalize_requested.connect(self.finalize_discovery)
         self.discovery_dialog.cancel_requested.connect(self.cancel_discovery)
+        self.discovery_dialog.candidate_changed.connect(self.save_candidate_annotation)
+        self.discovery_dialog.candidates_confirmed.connect(self.confirm_discovery_candidates)
         self.discovery_dialog.show()
 
     def set_discovery_stage(self, stage, label):
@@ -718,16 +801,41 @@ class CaptureWindow(QMainWindow):
         try:
             response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/events", json=payload, headers=signed_headers(self.device_identity, payload), timeout=20)
             if response.status_code == 422:
-                self.bridge.log.emit("已忽略疑似支付接口")
+                self.bridge.log.emit("\\u5df2\\u5ffd\\u7565\\u652f\\u4ed8\\u76f8\\u5173\\u5185\\u5bb9")
                 return
             response.raise_for_status()
+            result = response.json()
             self.discovery_counts[stage] = self.discovery_counts.get(stage, 0) + 1
             self.bridge.discovery_count.emit(stage, self.discovery_counts[stage])
-            self.bridge.log.emit(f"[{stage}] 已安全采集 {event.get('method')} {event.get('url', '').split('?')[0]}")
+            result["stage"] = stage
+            self.bridge.discovery_candidate.emit(result)
+            self.bridge.log.emit(f"[{stage}] \\u5df2\\u6574\\u7406\\u4f1a\\u8bdd\\u4fe1\\u606f {event.get('method')} {event.get('url', '').split('?')[0]}")
         except Exception as exc:
-            self.bridge.log.emit("发现记录上传失败：" + str(exc))
+            self.bridge.log.emit("\\u53d1\\u73b0\\u4f1a\\u8bdd\\u4fe1\\u606f\\u4e0a\\u4f20\\u5931\\u8d25\\uff1a" + str(exc))
         finally:
             self.bridge.discovery_count.emit(stage, -1)
+
+    def add_discovery_candidate(self, item):
+        if self.discovery_dialog:
+            self.discovery_dialog.add_candidate(item)
+
+    def save_candidate_annotation(self, event_id, selected, label, tags_text, note):
+        session_id = self.discovery_session
+        if not session_id:
+            return
+        payload = {"selected": selected, "label": label, "tags": [tag.strip() for tag in tags_text.split(",") if tag.strip()], "note": note}
+        def worker():
+            try:
+                response = server_request("POST", SERVER_URL.rstrip("/") + f"/api/venue-discovery/sessions/{session_id}/events/{event_id}/annotation", json=payload, headers=signed_headers(self.device_identity, payload), timeout=15)
+                response.raise_for_status()
+                self.bridge.log.emit("\\u5019\\u9009\\u4f1a\\u8bdd\\u4fe1\\u606f\\u6807\\u6ce8\\u5df2\\u4fdd\\u5b58")
+            except Exception as exc:
+                self.bridge.log.emit("\\u4f1a\\u8bdd\\u4fe1\\u606f\\u6807\\u6ce8\\u4fdd\\u5b58\\u5931\\u8d25\\uff1a" + str(exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def confirm_discovery_candidates(self):
+        self.write_log("\\u5df2\\u786e\\u8ba4\\u5019\\u9009\\u4f1a\\u8bdd\\u4fe1\\u606f\\uff0c\\u8bf7\\u7ee7\\u7eed\\u5b8c\\u6574\\u8d70\\u8ba2\\u573a\\u6d41\\u7a0b")
+        self.set_discovery_stage("account", "1. \\u8d26\\u6237\\u9a8c\\u8bc1")
 
     def apply_discovery_count(self, stage, count):
         if count == -1:
