@@ -1,4 +1,5 @@
 import asyncio
+import ctypes
 import hashlib
 import hmac
 import secrets
@@ -11,6 +12,7 @@ import socket
 import sys
 import threading
 import tkinter as tk
+import winreg
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from PIL import ImageTk
@@ -82,6 +84,56 @@ def find_free_port(start=8080):
 
 def cert_path():
     return Path(os.environ.get("USERPROFILE", Path.home())) / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+
+
+class WindowsProxyManager:
+    KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    VALUE_NAMES = ("ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL")
+
+    def __init__(self):
+        self.snapshot = None
+
+    @staticmethod
+    def _notify():
+        internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
+        internet_set_option(0, 39, 0, 0)
+        internet_set_option(0, 37, 0, 0)
+
+    def enable(self, port):
+        if self.snapshot is None:
+            self.snapshot = {}
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.KEY_PATH, 0, winreg.KEY_READ) as key:
+                for name in self.VALUE_NAMES:
+                    try:
+                        self.snapshot[name] = winreg.QueryValueEx(key, name)
+                    except FileNotFoundError:
+                        self.snapshot[name] = None
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)
+            winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, "127.0.0.1:%s" % port)
+            winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, "")
+            try:
+                winreg.DeleteValue(key, "AutoConfigURL")
+            except FileNotFoundError:
+                pass
+        self._notify()
+
+    def restore(self):
+        if self.snapshot is None:
+            return
+        snapshot = self.snapshot
+        self.snapshot = None
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            for name, saved in snapshot.items():
+                if saved is None:
+                    try:
+                        winreg.DeleteValue(key, name)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    value, value_type = saved
+                    winreg.SetValueEx(key, name, 0, value_type, value)
+        self._notify()
 
 
 class CaptureAddon:
@@ -235,16 +287,21 @@ class ProxyController:
         self.log = log
         self.master = None
         self.thread = None
+        self.started = threading.Event()
 
     def start(self, port):
+        self.started.clear()
         self.thread = threading.Thread(target=self.run, args=(port,), daemon=True)
         self.thread.start()
+        if not self.started.wait(timeout=5):
+            raise RuntimeError("Proxy listener did not start in time.")
 
     def run(self, port):
         async def runner():
             master = DumpMaster(options.Options(listen_host="0.0.0.0", listen_port=port), with_termlog=False, with_dumper=False)
             self.master = master
             master.addons.add(CaptureAddon(self.config, self.events))
+            self.started.set()
             self.log("代理已启动：0.0.0.0:%s" % port)
             try:
                 await master.run()

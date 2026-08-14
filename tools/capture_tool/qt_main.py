@@ -30,6 +30,7 @@ try:
     from .main import (
         SERVER_URL,
         ProxyController,
+        WindowsProxyManager,
         cert_path,
         find_free_port,
         load_device_identity,
@@ -40,6 +41,7 @@ except ImportError:
     from main import (
         SERVER_URL,
         ProxyController,
+        WindowsProxyManager,
         cert_path,
         find_free_port,
         load_device_identity,
@@ -268,6 +270,7 @@ class CaptureWindow(QMainWindow):
         self.cards = {}
         self.selected_venue = None
         self.controller = None
+        self.system_proxy = WindowsProxyManager()
         self.port = None
         self.discovery_session = None
         self.discovery_config = None
@@ -500,6 +503,7 @@ class CaptureWindow(QMainWindow):
         if self.controller:
             self.controller.stop()
             self.controller = None
+            self.system_proxy.restore()
             self.action.setText("开始监听")
             self.network_label.setText("监听已停止")
             self.capture_label.setText("等待开始监听")
@@ -518,6 +522,7 @@ class CaptureWindow(QMainWindow):
         self.port = find_free_port()
         self.controller = ProxyController(capture, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
+        self.system_proxy.enable(self.port)
         self.action.setText("停止监听")
         self.network_label.setText(f"代理地址 {local_ip()}:{self.port}\n手机与电脑同一 Wi-Fi 后可使用此代理")
         self.capture_label.setText("正在监听 " + (self.selected_venue.get("name") or ""))
@@ -573,6 +578,7 @@ class CaptureWindow(QMainWindow):
         self.port = find_free_port()
         self.controller = ProxyController(self.discovery_config, self.events, self.bridge.log.emit)
         self.controller.start(self.port)
+        self.system_proxy.enable(self.port)
         self.action.setText("停止监听")
         self.network_label.setText(f"发现代理 {local_ip()}:{self.port}")
         self.capture_label.setText("新球场发现 · 账户验证")
@@ -633,6 +639,7 @@ class CaptureWindow(QMainWindow):
         if self.controller:
             self.controller.stop()
             self.controller = None
+            self.system_proxy.restore()
             self.action.setText("开始监听")
         session_id = self.discovery_session
         def worker():
@@ -662,6 +669,7 @@ class CaptureWindow(QMainWindow):
         if self.controller:
             self.controller.stop()
             self.controller = None
+            self.system_proxy.restore()
             self.action.setText("开始监听")
         session_id = self.discovery_session
         self.discovery_session = None
@@ -757,6 +765,7 @@ class CaptureWindow(QMainWindow):
         self.controller = None
         if controller:
             controller.stop()
+        self.system_proxy.restore()
 
 
 STYLESHEET = f"""

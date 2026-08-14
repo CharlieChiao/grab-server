@@ -181,6 +181,8 @@ Fast-start package: keep and distribute the entire `dist/CourtCredentialCapture`
 
 Build the single-file per-user installer with `tools/capture_tool/build-installer.ps1`. It outputs `dist/setup/CourtCredentialCapture-Setup.exe` and installs the app under `%LocalAppData%\CourtCredentialCapture`. Pairing data remains under `%AppData%\CourtCredentialCapture`.
 
+On Windows, starting capture saves the current per-user Internet proxy settings and routes system traffic through the local capture proxy. Stopping capture, cancelling discovery, finalizing discovery, or closing the app restores the original proxy settings.
+
 
 ## 多用户数据隔离
 
