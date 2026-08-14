@@ -1,6 +1,7 @@
 import io
 import json
 import queue
+import sys
 import threading
 
 import qrcode
@@ -747,9 +748,15 @@ class CaptureWindow(QMainWindow):
         self.log_label.setText("\n".join(current[-9:]))
 
     def closeEvent(self, event):
-        if self.controller:
-            self.controller.stop()
+        self.shutdown()
         event.accept()
+
+    def shutdown(self):
+        self.poll_timer.stop()
+        controller = self.controller
+        self.controller = None
+        if controller:
+            controller.stop()
 
 
 STYLESHEET = f"""
@@ -788,14 +795,15 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 
 
 def main():
-    app = QApplication([])
+    app = QApplication(sys.argv)
     app.setApplicationName("Court Capture")
     app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setStyleSheet(STYLESHEET)
     window = CaptureWindow()
+    app.aboutToQuit.connect(window.shutdown)
     window.show()
-    app.exec()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

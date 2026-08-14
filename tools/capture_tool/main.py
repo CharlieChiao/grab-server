@@ -253,9 +253,14 @@ class ProxyController:
         asyncio.run(runner())
 
     def stop(self):
-        if self.master:
-            self.master.shutdown()
-            self.master = None
+        master = self.master
+        self.master = None
+        if master:
+            master.shutdown()
+        thread = self.thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=3)
+        self.thread = None
 
 
 class CaptureApp(tk.Tk):

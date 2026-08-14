@@ -10,5 +10,5 @@ SERVER_URL = "https://api.cn.orangechai.fun/grab"
 UPDATE_TOKEN = ""
 "@ | Set-Content $config -Encoding utf8
 python -m pip install -r $requirements
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name CourtCredentialCapture --add-data "$venue;src/venues/picklepop" $entry
+python -m PyInstaller --noconfirm --clean --onedir --windowed --name CourtCredentialCapture --add-data "$venue;src/venues/picklepop" $entry
 Write-Host "EXE 已生成到 dist/CourtCredentialCapture.exe" -ForegroundColor Green

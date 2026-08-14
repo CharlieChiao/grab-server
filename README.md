@@ -128,7 +128,7 @@ data/credentials.json          凭证(不入git)
 
 已生成 Windows 可执行文件：
 
-    dist/CourtCredentialCapture.exe
+    dist/CourtCredentialCapture/CourtCredentialCapture.exe
 
 使用步骤：
 
@@ -176,6 +176,8 @@ data/credentials.json          凭证(不入git)
 重新打包：
 
     powershell -ExecutionPolicy Bypass -File tools/capture_tool/build.ps1
+
+Fast-start package: keep and distribute the entire `dist/CourtCredentialCapture` directory; the EXE depends on the adjacent `_internal` directory.
 
 
 ## 多用户数据隔离
