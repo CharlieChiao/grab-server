@@ -335,7 +335,7 @@ export function classifyGrabResult(result) {
 export function saveRetryCalibration(calibration) {
   const fresh = yaml.load(fs.readFileSync(venueFile, "utf8"));
   fresh.releaseRetry = fresh.releaseRetry || {};
-  fresh.releaseRetry.fastRetry = { ...(fresh.releaseRetry.fastRetry || {}), minIntervalMs: Number(calibration.extraWaitMs || 0), jitterMs: 0, calibration: { ...calibration } };
+  fresh.releaseRetry.fastRetry = { ...(fresh.releaseRetry.fastRetry || {}), minIntervalMs: Number(calibration.extraWaitMs || 0), jitterMs: Number(fresh.releaseRetry.fastRetry?.jitterMs || 30), calibration: { ...calibration } };
   fs.writeFileSync(venueFile, yaml.dump(fresh, { lineWidth: -1, noRefs: true }), "utf8");
   cfg.releaseRetry = fresh.releaseRetry;
   meta.raw.releaseRetry = fresh.releaseRetry;
