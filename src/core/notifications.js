@@ -56,5 +56,6 @@ export async function notifyJobResult(job) {
   const response = await fetch("https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=" + encodeURIComponent(token), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const result = await response.json();
   if (result.errcode && result.errcode !== 0) throw new Error(result.errmsg || "subscribe send failed");
+  db.prepare("UPDATE users SET notify_job_result=0 WHERE id=?").run(job.userId);
   return { ok: true };
 }
