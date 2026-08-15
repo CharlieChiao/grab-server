@@ -33,6 +33,10 @@ releaseRetry:
   defaultMinIntervalMs: 3000
   jitterMs: 300
   maxAttempts: 8
+  fastRetry:
+    # Extra wait after a confirmed not-released response. Requests remain serial.
+    intervalsMs: [0, 80, 140, 220, 350, 500, 750]
+    jitterMs: 30
   calibration:
     endpoint: slots-history
     initialIntervalMs: 3000

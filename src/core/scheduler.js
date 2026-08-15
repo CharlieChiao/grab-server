@@ -50,6 +50,11 @@ async function runGrab(job, credentialArg, venueArg) {
   const scopeKey = adapterProfile.scopeKey || job.venueId;
   let profile = getRiskProfile(job.venueId, adapterProfile);
   const maxAttempts = Math.min(60, Math.max(Number(profile.booking.maxRetry || 5), Number(adapterProfile.booking?.maxRetry || 0), Number(job.target.ext?.maxRetry || 0)));
+  const retryPolicy = venue.meta?.raw?.releaseRetry || {};
+  const fastRetry = retryPolicy.fastRetry || {};
+  const fastRetryIntervals = Array.isArray(fastRetry.intervalsMs) ? fastRetry.intervalsMs.map(Number).filter(Number.isFinite) : [];
+  const releaseMaxAttempts = Math.max(1, Number(retryPolicy.maxAttempts || maxAttempts));
+  let releasePending = false;
   let prebuilt = null;
   try { if (typeof venue.buildGrabRequest === "function") prebuilt = venue.buildGrabRequest(job.target, credential); }
   catch (e) { updateJob(job.id, { status: "failed", result: { message: e.message } }); scheduled.delete(job.id); return; }
@@ -60,15 +65,15 @@ async function runGrab(job, credentialArg, venueArg) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let dispatchedMs = null;
       try {
+        const releaseInterval = releasePending ? fastRetryIntervals[Math.min(attempt - 2, Math.max(0, fastRetryIntervals.length - 1))] : null;
         result = await enqueueBooking(job.venueId, adapterProfile, async () => {
           dispatchedMs = Date.now();
           const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
           console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${attempt} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchedMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchedMs - plannedMs}`);
           return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
-        });
+        }, releasePending ? { minIntervalMs: Number.isFinite(releaseInterval) ? releaseInterval : Number(fastRetry.minIntervalMs || 0), jitterMs: Number(fastRetry.jitterMs || 0) } : undefined);
       } catch (e) { result = { success: false, message: String(e.message || e) }; }
       let classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
-      const retryPolicy = venue.meta?.raw?.releaseRetry || {};
       const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
       const releaseWindowMs = Number(retryPolicy.unavailableGraceMs || 0);
       const unavailableText = String(result?.message || "");
@@ -76,11 +81,13 @@ async function runGrab(job, credentialArg, venueArg) {
       recordAttempt(job, attempt, dispatchedMs || Date.now(), classification, dispatchedMs ? Date.now() - dispatchedMs : 0, result?.message);
       profile = recordRiskEvent(job.venueId, classification === "success" ? "success" : classification === "rate-limited" ? "rate-limited" : "request", adapterProfile);
       if (classification === "success") break;
-      if (!["not-released", "release-pending", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts) break;
+      if (classification === "release-pending") releasePending = true;
+      if (!["not-released", "release-pending", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts || (classification === "release-pending" && attempt >= releaseMaxAttempts)) break;
       if (classification === "release-pending" && releaseElapsedMs >= releaseWindowMs) break;
       const delay = linearRetryDelay(profile, classification);
       if (classification === "rate-limited") applyCooldown(scopeKey, delay);
-      console.warn("[grab] job=" + job.id + " retry=" + (attempt + 1) + "/" + maxAttempts + " class=" + classification + " delayMs=" + delay);
+      const loggedDelay = classification === "release-pending" ? (fastRetryIntervals[Math.min(attempt - 1, Math.max(0, fastRetryIntervals.length - 1))] ?? Number(fastRetry.minIntervalMs || 0)) : delay;
+      console.warn("[grab] job=" + job.id + " retry=" + (attempt + 1) + "/" + (classification === "release-pending" ? releaseMaxAttempts : maxAttempts) + " class=" + classification + " delayMs=" + loggedDelay + (classification === "release-pending" ? " fastRelease=true" : ""));
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
