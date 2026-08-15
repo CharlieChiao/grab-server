@@ -57,7 +57,7 @@ export async function calibrateUnavailableRetry({ venueId, userId, target, sampl
 
   for (; extra <= maxExtra; extra += step) {
     console.log(`[retry-calibration] venue=${venueId} candidateExtraWaitMs=${extra} samples=${samples}`);
-    onProgress({ candidateExtraWaitMs: extra, samples, attempts: allAttempts.length });
+    onProgress({ phase: "testing", candidateExtraWaitMs: extra, samples, attempts: allAttempts.length });
     const candidate = [];
     let previousDispatch = null;
     let rateLimited = false;
@@ -85,7 +85,7 @@ export async function calibrateUnavailableRetry({ venueId, userId, target, sampl
       return { ok: true, safeExtraWaitMs: extra, attempts: allAttempts, saved, message: "Calibration saved. The release retry path now uses this extra wait plus jitter." };
     }
     console.warn(`[retry-calibration] venue=${venueId} rate-limited at extraWaitMs=${extra}; cooling down 10000ms`);
-    onProgress({ candidateExtraWaitMs: extra, samples, attempts: allAttempts.length, coolingDownMs: 10000 });
+    onProgress({ phase: "cooling-down", candidateExtraWaitMs: extra, samples, attempts: allAttempts.length, coolingDownMs: 10000, coolingDownUntil: new Date(Date.now() + 10000).toISOString() });
     await sleep(10000);
   }
   return { ok: false, stopped: "no-safe-interval", attempts: allAttempts, message: "No safe interval found within the configured maximum." };
