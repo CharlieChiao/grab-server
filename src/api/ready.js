@@ -127,6 +127,7 @@ router.post("/risk/:venueId/retry-calibrate", async (req, res) => {
   } catch (error) { res.status(400).json({ error: "retry calibration failed", detail: String(error.message || error) }); }
 });
 router.get("/risk/:venueId/retry-calibrate/:runId", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   const run = getUnavailableRetryCalibration(req.params.runId, req.user.id, req.params.venueId);
   if (!run) return res.status(404).json({ error: "calibration run not found" });
   res.json({ ok: true, run });
