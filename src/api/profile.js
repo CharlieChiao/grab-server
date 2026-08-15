@@ -13,11 +13,12 @@ function profileResponse(row) {
       ? `data:${row.avatar_mime || "image/jpeg"};base64,${Buffer.from(row.avatar_data).toString("base64")}`
       : "",
     updatedAt: row?.profile_updated_at || null,
+    developer: !!row?.developer,
   };
 }
 
 router.get("/me", (req, res) => {
-  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at FROM users WHERE id=?").get(req.user.id);
+  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer FROM users WHERE id=?").get(req.user.id);
   res.json(profileResponse(row));
 });
 
@@ -35,7 +36,7 @@ router.put("/me", (req, res) => {
   const now = nowIso();
   db.prepare(`UPDATE users SET nickname=?, avatar_mime=COALESCE(?,avatar_mime), avatar_data=COALESCE(?,avatar_data), profile_updated_at=? WHERE id=?`)
     .run(nickname, avatar ? mime : null, avatar, now, req.user.id);
-  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at FROM users WHERE id=?").get(req.user.id);
+  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer FROM users WHERE id=?").get(req.user.id);
   res.json(profileResponse(row));
 });
 

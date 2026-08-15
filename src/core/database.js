@@ -36,6 +36,7 @@ ensureUserColumn("avatar_data", "BLOB");
 ensureUserColumn("profile_updated_at", "TEXT");
 ensureUserColumn("openid_ciphertext", "TEXT");
 ensureUserColumn("notify_job_result", "INTEGER NOT NULL DEFAULT 0");
+ensureUserColumn("developer", "INTEGER NOT NULL DEFAULT 0");
 function ensureDiscoverySessionColumn(name, definition) {
   const columns = db.prepare("PRAGMA table_info(venue_discovery_sessions)").all();
   if (!columns.some((column) => column.name === name)) {
