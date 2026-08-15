@@ -16,7 +16,8 @@ import { Pool, request as undiciRequest } from "undici";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 璇诲彇澹版槑寮忛厤缃?
-const cfg = yaml.load(fs.readFileSync(path.join(__dirname, "venue.yml"), "utf8"));
+const venueFile = path.join(__dirname, "venue.yml");
+const cfg = yaml.load(fs.readFileSync(venueFile, "utf8"));
 const B = cfg.backend;
 
 /**
@@ -330,6 +331,17 @@ export function classifyGrabResult(result) {
   return "terminal";
 }
 
+
+export function saveRetryCalibration(calibration) {
+  const fresh = yaml.load(fs.readFileSync(venueFile, "utf8"));
+  fresh.releaseRetry = fresh.releaseRetry || {};
+  fresh.releaseRetry.fastRetry = { ...(fresh.releaseRetry.fastRetry || {}), minIntervalMs: Number(calibration.extraWaitMs || 0), jitterMs: 0, calibration: { ...calibration } };
+  fs.writeFileSync(venueFile, yaml.dump(fresh, { lineWidth: -1, noRefs: true }), "utf8");
+  cfg.releaseRetry = fresh.releaseRetry;
+  meta.raw.releaseRetry = fresh.releaseRetry;
+  return cfg.releaseRetry.fastRetry;
+}
+
 export function discoverCapture(exchange) {
   let json = exchange && exchange.responseBody;
   if (typeof json === "string") { try { json = JSON.parse(json); } catch { return { courts: [] }; } }
@@ -353,5 +365,5 @@ export async function riskProbe(cred) {
     return { ok: false, rateLimited: message.includes("频繁") || message.includes("429"), latencyMs: Date.now() - started, message, endpoint: "/wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2" };
   }
 }
-export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe };
+export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration };
 

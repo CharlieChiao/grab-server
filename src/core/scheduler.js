@@ -65,7 +65,8 @@ async function runGrab(job, credentialArg, venueArg) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let dispatchedMs = null;
       try {
-        const releaseInterval = releasePending ? fastRetryIntervals[Math.min(attempt - 2, Math.max(0, fastRetryIntervals.length - 1))] : null;
+        const releaseBaseInterval = Number(fastRetry.minIntervalMs || 0);
+        const releaseInterval = releasePending ? releaseBaseInterval + (fastRetryIntervals[Math.min(attempt - 2, Math.max(0, fastRetryIntervals.length - 1))] || 0) : null;
         result = await enqueueBooking(job.venueId, adapterProfile, async () => {
           dispatchedMs = Date.now();
           const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
@@ -86,7 +87,7 @@ async function runGrab(job, credentialArg, venueArg) {
       if (classification === "release-pending" && releaseElapsedMs >= releaseWindowMs) break;
       const delay = linearRetryDelay(profile, classification);
       if (classification === "rate-limited") applyCooldown(scopeKey, delay);
-      const loggedDelay = classification === "release-pending" ? (fastRetryIntervals[Math.min(attempt - 1, Math.max(0, fastRetryIntervals.length - 1))] ?? Number(fastRetry.minIntervalMs || 0)) : delay;
+      const loggedDelay = classification === "release-pending" ? (Number(fastRetry.minIntervalMs || 0) + (fastRetryIntervals[Math.min(attempt - 1, Math.max(0, fastRetryIntervals.length - 1))] || 0)) : delay;
       console.warn("[grab] job=" + job.id + " retry=" + (attempt + 1) + "/" + (classification === "release-pending" ? releaseMaxAttempts : maxAttempts) + " class=" + classification + " delayMs=" + loggedDelay + (classification === "release-pending" ? " fastRelease=true" : ""));
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));

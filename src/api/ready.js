@@ -4,7 +4,7 @@ import { doReadyCheck, readyCache } from "../core/scheduler.js";
 import { getCredential, setCredential } from "../core/credentialStore.js";
 import { db, nowIso } from "../core/database.js";
 import { calibrateVenue } from "../core/riskCalibration.js";
-import { runManualReleaseProbe } from "../core/releaseProbe.js";
+import { runManualReleaseProbe, calibrateUnavailableRetry } from "../core/releaseProbe.js";
 import { notificationStatus, setJobNotifications } from "../core/notifications.js";
 
 const router = express.Router();
@@ -126,6 +126,12 @@ router.post("/risk/:venueId/release-probe", async (req, res) => {
     const result = await runManualReleaseProbe({ venueId: req.params.venueId, userId: req.user.id, ...(req.body || {}) });
     res.json(result);
   } catch (error) { res.status(400).json({ error: "manual release probe failed", detail: String(error.message || error) }); }
+});
+router.post("/risk/:venueId/retry-calibrate", async (req, res) => {
+  try {
+    if (req.body?.confirmUnavailableTarget !== true) return res.status(400).json({ error: "confirmUnavailableTarget is required" });
+    res.json(await calibrateUnavailableRetry({ venueId: req.params.venueId, userId: req.user.id, ...(req.body || {}) }));
+  } catch (error) { res.status(400).json({ error: "retry calibration failed", detail: String(error.message || error) }); }
 });
 router.get("/notifications/job-result", (req, res) => res.json({ ok: true, ...notificationStatus(req.user.id) }));
 router.put("/notifications/job-result", (req, res) => res.json({ ok: true, ...setJobNotifications(req.user.id, req.body?.enabled === true) }));
