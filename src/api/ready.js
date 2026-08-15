@@ -4,7 +4,7 @@ import { doReadyCheck, readyCache } from "../core/scheduler.js";
 import { getCredential, setCredential } from "../core/credentialStore.js";
 import { db, nowIso } from "../core/database.js";
 import { calibrateVenue } from "../core/riskCalibration.js";
-import { calibrateUnavailableRetry } from "../core/releaseProbe.js";
+import { startUnavailableRetryCalibration, getUnavailableRetryCalibration } from "../core/releaseProbe.js";
 import { notificationStatus, setJobNotifications } from "../core/notifications.js";
 
 const router = express.Router();
@@ -123,8 +123,13 @@ router.post("/risk/:venueId/calibrate", async (req, res) => {
 router.post("/risk/:venueId/retry-calibrate", async (req, res) => {
   try {
     if (req.body?.confirmUnavailableTarget !== true) return res.status(400).json({ error: "confirmUnavailableTarget is required" });
-    res.json(await calibrateUnavailableRetry({ venueId: req.params.venueId, userId: req.user.id, ...(req.body || {}) }));
+    res.status(202).json({ ok: true, run: startUnavailableRetryCalibration({ venueId: req.params.venueId, userId: req.user.id, ...(req.body || {}) }) });
   } catch (error) { res.status(400).json({ error: "retry calibration failed", detail: String(error.message || error) }); }
+});
+router.get("/risk/:venueId/retry-calibrate/:runId", (req, res) => {
+  const run = getUnavailableRetryCalibration(req.params.runId, req.user.id, req.params.venueId);
+  if (!run) return res.status(404).json({ error: "calibration run not found" });
+  res.json({ ok: true, run });
 });
 router.get("/notifications/job-result", (req, res) => res.json({ ok: true, ...notificationStatus(req.user.id) }));
 router.put("/notifications/job-result", (req, res) => res.json({ ok: true, ...setJobNotifications(req.user.id, req.body?.enabled === true) }));
