@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { db } from "../core/database.js";
 import { listVenues, loadVenues } from "../core/venueRegistry.js";
 const router = express.Router();
@@ -10,6 +12,12 @@ const venuesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", 
 function requireDeveloper(req,res,next){ const row=db.prepare("SELECT developer FROM users WHERE id=?").get(req.user.id); if(!row?.developer)return res.status(403).json({error:"仅开发者可管理球场配置"}); next(); }
 function configPath(id){ if(!/^[a-z0-9_-]+$/i.test(id))return null; const file=path.join(venuesDir,id,"venue.yml"); return file.startsWith(venuesDir+path.sep)?file:null; }
 function validate(id,text){ if(Buffer.byteLength(text,"utf8")>262144)throw new Error("配置不能超过 256KB"); const value=yaml.load(text); if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("YAML 根节点必须是对象"); if(value.id&&String(value.id)!==id)throw new Error("配置 id 与球场 id 不一致"); if(!value.name)throw new Error("缺少 name"); if(!value.bookingHours?.start||!value.bookingHours?.end)throw new Error("缺少 bookingHours.start/end"); return value; }
+const execFileAsync = promisify(execFile);
+router.get("/developer/logs", requireDeveloper, async (req,res) => {
+  const lines=Math.max(20,Math.min(500,Number(req.query.lines)||150));
+  try { const {stdout}=await execFileAsync("journalctl",["-u","grab-server","-n",String(lines),"--no-pager","-o","short-iso"],{timeout:5000,maxBuffer:512*1024}); res.set("Cache-Control","no-store").json({ok:true,logs:stdout}); }
+  catch(error) { res.status(502).json({error:"读取服务器日志失败",detail:String(error.message||error)}); }
+});
 router.use("/developer/venue-configs",requireDeveloper);
 router.get("/developer/venue-configs",(req,res)=>res.json({ok:true,venues:listVenues()}));
 router.get("/developer/venue-configs/:id",(req,res)=>{ const file=configPath(req.params.id); if(!file||!fs.existsSync(file))return res.status(404).json({error:"球场配置不存在"}); res.json({ok:true,id:req.params.id,yaml:fs.readFileSync(file,"utf8")}); });

@@ -21,11 +21,11 @@ export function rememberOpenId(userId, openid) {
   db.prepare("INSERT INTO users(id,openid_hash,openid_ciphertext,created_at,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET openid_ciphertext=excluded.openid_ciphertext,last_seen_at=excluded.last_seen_at").run(userId, userId, encryptOpenId(openid), nowIso(), nowIso());
 }
 export function notificationStatus(userId) {
-  const row = db.prepare("SELECT notify_job_result,openid_ciphertext FROM users WHERE id=?").get(userId) || {};
-  return { configured: !!(APPID && APP_SECRET && TEMPLATE_ID), templateId: TEMPLATE_ID || null, enabled: !!row.notify_job_result, hasOpenId: !!row.openid_ciphertext };
+  const row = db.prepare("SELECT notification_count,openid_ciphertext FROM users WHERE id=?").get(userId) || {};
+  return { configured: !!(APPID && APP_SECRET && TEMPLATE_ID), templateId: TEMPLATE_ID || null, enabled: Number(row.notification_count || 0) > 0, count: Number(row.notification_count || 0), hasOpenId: !!row.openid_ciphertext };
 }
 export function setJobNotifications(userId, enabled) {
-  db.prepare("UPDATE users SET notify_job_result=? WHERE id=?").run(enabled ? 1 : 0, userId);
+  if (enabled) db.prepare("UPDATE users SET notification_count=notification_count+1, notify_job_result=1 WHERE id=?").run(userId);
   return notificationStatus(userId);
 }
 async function accessToken() {
@@ -37,8 +37,8 @@ async function accessToken() {
   return cachedToken.value;
 }
 export async function notifyJobResult(job) {
-  const row = db.prepare("SELECT openid_ciphertext,notify_job_result FROM users WHERE id=?").get(job.userId);
-  if (!TEMPLATE_ID || !APPID || !APP_SECRET || !row?.notify_job_result || !row.openid_ciphertext) return { skipped: true };
+  const row = db.prepare("SELECT openid_ciphertext,notification_count FROM users WHERE id=?").get(job.userId);
+  if (!TEMPLATE_ID || !APPID || !APP_SECRET || !(Number(row?.notification_count || 0) > 0) || !row.openid_ciphertext) return { skipped: true };
   const target = job.target || {};
   const first = Array.isArray(target.courts) ? target.courts[0] || {} : target;
   const venue = String(job.venueId || "").slice(0, 10);
@@ -56,6 +56,6 @@ export async function notifyJobResult(job) {
   const response = await fetch("https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=" + encodeURIComponent(token), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const result = await response.json();
   if (result.errcode && result.errcode !== 0) throw new Error(result.errmsg || "subscribe send failed");
-  db.prepare("UPDATE users SET notify_job_result=0 WHERE id=?").run(job.userId);
+  db.prepare("UPDATE users SET notification_count=MAX(0,notification_count-1), notify_job_result=CASE WHEN notification_count<=1 THEN 0 ELSE 1 END WHERE id=?").run(job.userId);
   return { ok: true };
 }
