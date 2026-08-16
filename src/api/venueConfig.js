@@ -15,7 +15,7 @@ function validate(id,text){ if(Buffer.byteLength(text,"utf8")>262144)throw new E
 const execFileAsync = promisify(execFile);
 router.get("/developer/logs", requireDeveloper, async (req,res) => {
   const lines=Math.max(20,Math.min(500,Number(req.query.lines)||150));
-  try { const {stdout}=await execFileAsync("journalctl",["-u","grab-server","-n",String(lines),"--no-pager","-o","short-iso"],{timeout:5000,maxBuffer:512*1024}); res.set("Cache-Control","no-store").json({ok:true,logs:stdout}); }
+  try { const {stdout}=await execFileAsync("journalctl",["-u","grab-server","-n",String(lines),"--no-pager","-o","short-iso"],{timeout:5000,maxBuffer:512*1024}); const maxBytes=96*1024; const raw=Buffer.from(stdout,"utf8"); const truncated=raw.length>maxBytes; const logs=(truncated ? "[日志过长，已仅保留末尾 96KB]\n" : "")+raw.subarray(Math.max(0,raw.length-maxBytes)).toString("utf8"); res.set("Cache-Control","no-store").json({ok:true,logs,truncated}); }
   catch(error) { res.status(502).json({error:"读取服务器日志失败",detail:String(error.message||error)}); }
 });
 router.use("/developer/venue-configs",requireDeveloper);
