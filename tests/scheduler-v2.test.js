@@ -23,3 +23,10 @@ test("scheduler no longer gates dispatch on listSlots", () => {
   assert.equal(source.includes("updateJob(job.id, { status: \"pending\", fireAt"), false);
   assert.equal(source.includes("[dispatch]"), true);
 });
+
+test("calibrated release interval is applied on the first scheduled attempt", () => {
+  const source = fs.readFileSync(new URL("../src/core/scheduler.js", import.meta.url), "utf8");
+  assert.equal(source.includes("attempt === 1 && !!job.fireAt && hasCalibratedReleaseInterval"), true);
+  assert.equal(source.includes("hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval"), true);
+  assert.equal(source.includes("releaseBaseInterval +"), false);
+});

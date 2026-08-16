@@ -65,14 +65,17 @@ async function runGrab(job, credentialArg, venueArg) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let dispatchedMs = null;
       try {
-        const releaseBaseInterval = Number(fastRetry.minIntervalMs || 0);
-        const releaseInterval = releasePending ? releaseBaseInterval + (fastRetryIntervals[Math.min(attempt - 2, Math.max(0, fastRetryIntervals.length - 1))] || 0) : null;
+        const releaseBaseInterval = Number(fastRetry.minIntervalMs);
+        const hasCalibratedReleaseInterval = Number.isFinite(releaseBaseInterval) && releaseBaseInterval > 0;
+        const fallbackReleaseInterval = fastRetryIntervals[Math.min(Math.max(attempt - 2, 0), Math.max(0, fastRetryIntervals.length - 1))] || Number(retryPolicy.defaultMinIntervalMs || 0);
+        const releaseInterval = hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval;
+        const useReleaseLimiter = releasePending || (attempt === 1 && !!job.fireAt && hasCalibratedReleaseInterval);
         result = await enqueueBooking(job.venueId, adapterProfile, async () => {
           dispatchedMs = Date.now();
           const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
           console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${attempt} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchedMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchedMs - plannedMs}`);
           return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
-        }, releasePending ? { minIntervalMs: Number.isFinite(releaseInterval) ? releaseInterval : Number(fastRetry.minIntervalMs || 0), jitterMs: Number(fastRetry.jitterMs || 0) } : undefined);
+        }, useReleaseLimiter ? { minIntervalMs: releaseInterval, jitterMs: Number(fastRetry.jitterMs || 0) } : undefined);
       } catch (e) { result = { success: false, message: String(e.message || e) }; }
       let classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
       const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
@@ -87,7 +90,7 @@ async function runGrab(job, credentialArg, venueArg) {
       if (classification === "release-pending" && releaseElapsedMs >= releaseWindowMs) break;
       const delay = linearRetryDelay(profile, classification);
       if (classification === "rate-limited") applyCooldown(scopeKey, delay);
-      const loggedDelay = classification === "release-pending" ? (Number(fastRetry.minIntervalMs || 0) + (fastRetryIntervals[Math.min(attempt - 1, Math.max(0, fastRetryIntervals.length - 1))] || 0)) : delay;
+      const loggedDelay = classification === "release-pending" ? releaseInterval : delay;
       console.warn("[grab] job=" + job.id + " retry=" + (attempt + 1) + "/" + (classification === "release-pending" ? releaseMaxAttempts : maxAttempts) + " class=" + classification + " delayMs=" + loggedDelay + (classification === "release-pending" ? " fastRelease=true" : ""));
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
