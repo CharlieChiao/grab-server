@@ -326,6 +326,7 @@ export function classifyGrabResult(result) {
   if (result && result.success) return "success";
   const text = JSON.stringify(result || {}).toLowerCase();
   if (text.includes("操作太频繁") || text.includes("操作频繁") || text.includes("429")) return "rate-limited";
+  if (text.includes("已被排课") || text.includes("排课") || text.includes("锁场")) return "terminal";
   if (text.includes("尚未放场") || text.includes("还没开场") || text.includes("未开放") || text.includes("超过可预约日期")) return "not-released";
   if (text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("502") || text.includes("503")) return "transient";
   return "terminal";

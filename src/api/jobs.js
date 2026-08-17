@@ -1,5 +1,5 @@
 import express from "express";
-import { listJobsForUser, getJob, createJob, deleteJob } from "../core/jobStore.js";
+import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob } from "../core/jobStore.js";
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
 
@@ -57,6 +57,7 @@ router.post("/", (req, res) => {
 });
 
 router.get("/", (req, res) => res.json({ ok: true, jobs: listJobsForUser(req.user.id) }));
+router.get("/history", (req, res) => res.json({ ok: true, jobs: listHistoryForUser(req.user.id) }));
 router.get("/:id", (req, res) => {
   const job = getJob(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: "not found" });

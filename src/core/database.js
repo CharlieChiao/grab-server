@@ -13,6 +13,8 @@ PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, openid_hash TEXT UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (user_id TEXT NOT NULL, venue_id TEXT NOT NULL, credential_json TEXT NOT NULL, updated_at TEXT NOT NULL, ready_ok INTEGER, PRIMARY KEY (user_id, venue_id));
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, venue_id TEXT NOT NULL, target_json TEXT NOT NULL, fire_at TEXT, status TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS job_history (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, venue_id TEXT NOT NULL, target_json TEXT NOT NULL, fire_at TEXT, status TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_history_user_archived ON job_history(user_id, archived_at DESC);
 CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, public_key TEXT NOT NULL, device_name TEXT, paired_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_fire ON jobs(status, fire_at);
 CREATE TABLE IF NOT EXISTS job_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, attempt INTEGER NOT NULL, planned_at TEXT, dispatched_at TEXT NOT NULL, drift_ms INTEGER, scope_key TEXT, classification TEXT, duration_ms INTEGER, message TEXT);
@@ -58,6 +60,10 @@ if (fs.existsSync(legacyJobsFile) && db.prepare("SELECT COUNT(*) AS n FROM jobs"
     if (legacyJobs.length) console.log("[db] migrated " + legacyJobs.length + " legacy jobs");
   } catch (e) { console.warn("[db] legacy jobs migration skipped:", e.message); }
 }
+const archiveCompleted = db.prepare("INSERT OR IGNORE INTO job_history(id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,archived_at) SELECT id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,? FROM jobs WHERE status IN (\'done\',\'failed\')");
+archiveCompleted.run(nowIso());
+db.prepare("DELETE FROM jobs WHERE status IN (\'done\',\'failed\')").run();
+
 export const dbPath = () => dbFile;
 
 

@@ -1,4 +1,4 @@
-import { listJobs, updateJob } from "./jobStore.js";
+import { listJobs, updateJob, archiveJob } from "./jobStore.js";
 import { getVenue } from "./venueRegistry.js";
 import { getCredential } from "./credentialStore.js";
 import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
@@ -96,7 +96,7 @@ async function runGrab(job, credentialArg, venueArg) {
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
-    if (completed) notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
+    if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); }
   } finally { scheduled.delete(job.id); }
 }
 
