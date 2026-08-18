@@ -64,11 +64,11 @@ async function runGrab(job, credentialArg, venueArg) {
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let dispatchedMs = null;
+      const releaseBaseInterval = Number(fastRetry.minIntervalMs);
+      const hasCalibratedReleaseInterval = Number.isFinite(releaseBaseInterval) && releaseBaseInterval > 0;
+      const fallbackReleaseInterval = fastRetryIntervals[Math.min(Math.max(attempt - 2, 0), Math.max(0, fastRetryIntervals.length - 1))] || Number(retryPolicy.defaultMinIntervalMs || 0);
+      const releaseInterval = hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval;
       try {
-        const releaseBaseInterval = Number(fastRetry.minIntervalMs);
-        const hasCalibratedReleaseInterval = Number.isFinite(releaseBaseInterval) && releaseBaseInterval > 0;
-        const fallbackReleaseInterval = fastRetryIntervals[Math.min(Math.max(attempt - 2, 0), Math.max(0, fastRetryIntervals.length - 1))] || Number(retryPolicy.defaultMinIntervalMs || 0);
-        const releaseInterval = hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval;
         const useReleaseLimiter = releasePending || (attempt === 1 && !!job.fireAt && hasCalibratedReleaseInterval);
         result = await enqueueBooking(job.venueId, adapterProfile, async () => {
           dispatchedMs = Date.now();
@@ -97,6 +97,11 @@ async function runGrab(job, credentialArg, venueArg) {
     }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); }
+  } catch (error) {
+    const message = `调度异常: ${String(error?.message || error)}`;
+    console.error(`[grab] job=${job.id} ${message}`);
+    const completed = updateJob(job.id, { status: "failed", result: { success: false, message, elapsedMs: Date.now() - startedMs } });
+    if (completed) { notifyJobResult(completed).catch((notifyError) => console.warn("[notification]", notifyError.message)); archiveJob(completed.id); }
   } finally { scheduled.delete(job.id); }
 }
 
