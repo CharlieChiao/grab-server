@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "grab-court-server",
   "version": "1.0.0",
   "description": "鍙墿灞曠殑鐞冨満鎶㈣骞冲彴鍚庣 (鎻掍欢鍖栫悆鍦洪€傞厤鍣?+ 瀹氭椂璋冨害)",
@@ -8,10 +8,11 @@
     "start": "node server.js",
     "test": "node --test --test-concurrency=1"
   },
-  "dependencies": {    "express": "^4.19.2",
+  "dependencies": {
+    "express": "^4.19.2",
     "js-yaml": "^4.1.0",
     "node-cron": "^3.0.3",
+    "qrcode": "^1.5.4",
     "undici": "^7.29.0"
   }
 }
-
