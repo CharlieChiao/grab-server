@@ -14,10 +14,10 @@ function delegatedWechatJob() {
   return jobs.createJob({ userId: "owner", createdByUserId: "delegate", delegationId: "delegation", venueId: "picklepop", target: { date: "2099-01-01", court: "A", time: "19:00", ext: { payMethod: 900 } } });
 }
 
-test("delegated WeChat booking remains active while awaiting payment", () => {
+test("delegated manual-payment booking remains active while awaiting payment", () => {
   const job = delegatedWechatJob();
-  assert.equal(payments.requiresWechatPayment(job, { success: true, orderId: "order-1" }), true);
-  const waiting = payments.markAwaitingPayment(job, { success: true, orderId: "order-1" }, 321, 1_000_000);
+  assert.equal(payments.requiresManualPayment(job, { success: true, orderId: "order-1", requiresManualPayment: true }), true);
+  const waiting = payments.markAwaitingPayment(job, { success: true, orderId: "order-1", requiresManualPayment: true }, 321, 1_000_000);
   assert.equal(waiting.status, "awaiting_payment");
   assert.equal(waiting.result.paymentTimeoutMinutes, 15);
   assert.equal(jobs.listJobs().some((item) => item.id === job.id), true);

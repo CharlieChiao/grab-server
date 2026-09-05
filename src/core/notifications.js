@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
+import { paymentKind } from "./payCodes.js";
 
 const APPID = process.env.WECHAT_APPID || "";
 const APP_SECRET = process.env.WECHAT_APP_SECRET || "";
@@ -45,7 +46,7 @@ export async function notifyJobResult(job) {
   const court = String(first.court || first.courtUid || "").slice(0, 8);
   const time = String(first.time || target.time || "").slice(0, 5);
   const activity = [venue, court, time].filter(Boolean).join(" ").slice(0, 20) || "\u7403\u573a\u9884\u7ea6";
-  const delegatedWechat = !!job.delegationId && Number(target.ext?.payMethod) === 900;
+  const delegatedWechat = !!job.delegationId && paymentKind(job.venueId, target.ext?.payMethod) === "wechat";
   const outcome = job.status === "done" ? (delegatedWechat ? "待本人付款" : "\u9884\u7ea6\u6210\u529f") : "\u9884\u7ea6\u5931\u8d25";
   const amount = Number(target.ext?.totalCost || target.cost || first.cost || 0);
   const body = { touser: decryptOpenId(row.openid_ciphertext), template_id: TEMPLATE_ID, page: "pages/jobs/index", data: {

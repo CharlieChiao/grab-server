@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
+import { paymentKind } from "./payCodes.js";
 
 const rowToGroup = (row) => row && ({
   uid: row.uid,
@@ -109,7 +110,7 @@ export function finalizeAndRepeatGroup(groupUid) {
     try { allowed = JSON.parse(delegation.allowed_payments_json); } catch {}
     let target = {};
     try { target = JSON.parse(member.target_json); } catch {}
-    const payment = Number(target?.ext?.payMethod) === 40 ? "balance" : Number(target?.ext?.payMethod) === 900 ? "wechat" : null;
+    const payment = paymentKind(member.venue_id, target?.ext?.payMethod);
     return !!payment && allowed.includes(payment);
   });
   if (!repeatableMembers.length) {

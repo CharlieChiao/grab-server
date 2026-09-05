@@ -12,8 +12,9 @@ const PAYMENT_POLL_MS = 1000;
 const polling = new Set();
 const lastPolledAt = new Map();
 
-export function requiresWechatPayment(job, result) {
-  return !!job?.delegated && Number(job?.target?.ext?.payMethod) === 900 && !!result?.success && !!result?.orderId;
+// 委托任务抢订成功且适配器声明"需人工支付"时进入待支付窗口, 不关心具体支付方式/支付码
+export function requiresManualPayment(job, result) {
+  return !!job?.delegated && !!result?.success && !!result?.orderId && result?.requiresManualPayment === true;
 }
 
 export function markAwaitingPayment(job, result, elapsedMs, now = Date.now()) {
@@ -24,7 +25,7 @@ export function markAwaitingPayment(job, result, elapsedMs, now = Date.now()) {
 export function finishPayment(jobId, now = Date.now()) {
   const job = listJobs().find((item) => item.id === jobId);
   if (!job || job.status !== "awaiting_payment") return null;
-  const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "微信支付成功，预约已确认", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
+  const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
   if (completed) finishAndArchive(completed);
   return completed;
 }
@@ -51,7 +52,8 @@ function formatWait(ms) {
 // 限流按下单用户分 scope: B 与 A 是不同凭证用户, 理论上银豹按用户限流, 不应互相排队(@todo 若实测触发"操作太频繁"说明按 IP 限流, 需回退为共享 scope)
 async function attemptBalanceBooking(venue, job, credential, via, sinceMs) {
   try {
-    const target = { ...job.target, ext: { ...job.target.ext, payMethod: 40 } };
+    const balanceCode = venue.payments?.balance ?? 40; // 兜底下单改用本场声明的余额支付码
+    const target = { ...job.target, ext: { ...job.target.ext, payMethod: balanceCode } };
     const baseProfile = venue.riskProfile || {};
     const userId = via === "owner" ? job.userId : job.createdByUserId;
     const profile = { ...baseProfile, scopeKey: `${baseProfile.scopeKey || job.venueId}:${userId}` };

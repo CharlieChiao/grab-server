@@ -30,11 +30,11 @@ function paymentParams(job) {
 }
 function presentJob(job, requesterId) {
   if (!job) return null;
-  const delegatedWechat = job.delegated && Number(job.target?.ext?.payMethod) === 900 && job.status === "awaiting_payment";
+  const delegatedManual = job.delegated && job.status === "awaiting_payment"; // awaiting 状态即表示需授权方人工支付
   const owner = job.userId === requesterId;
-  const copy = { ...job, result: job.result ? { ...job.result } : null, paymentRequired: !!delegatedWechat, canPay: false };
+  const copy = { ...job, result: job.result ? { ...job.result } : null, paymentRequired: !!delegatedManual, canPay: false };
   if (copy.result) delete copy.result.raw;
-  if (delegatedWechat && owner) {
+  if (delegatedManual && owner) {
     const params = paymentParams(job);
     copy.paymentParams = params;
     copy.canPay = !!params;
@@ -93,7 +93,7 @@ router.post("/", (req, res) => {
   if (principalUserId && principalUserId !== req.user.id) {
     const delegation = getActiveDelegation(principalUserId, req.user.id);
     if (!delegation) return res.status(403).json({ error: "代理授权不存在或已过期" });
-    const paymentType = paymentTypeFromCode(target?.ext?.payMethod);
+    const paymentType = paymentTypeFromCode(venueId, target?.ext?.payMethod);
     let allowedPayments = [];
     try { allowedPayments = JSON.parse(delegation.allowed_payments_json); } catch {}
     if (!paymentType || !allowedPayments.includes(paymentType)) return res.status(403).json({ error: "授权方未允许该支付方式" });

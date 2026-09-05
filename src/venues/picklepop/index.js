@@ -284,6 +284,7 @@ export function interpretGrabResponse(json) {
         success: true,
         orderId: res.apptUid,
         message: "下单成功，但返回微信支付参数，可能需要手动支付",
+        requiresManualPayment: true,
         raw: json,
       };
     }
@@ -366,5 +367,5 @@ export async function riskProbe(cred) {
     return { ok: false, rateLimited: message.includes("频繁") || message.includes("429"), latencyMs: Date.now() - started, message, endpoint: "/wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2" };
   }
 }
-export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration };
+export default { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };
 

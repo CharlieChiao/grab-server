@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
+import { paymentKind } from "./payCodes.js";
 
 const INVITE_TTL_MS = 7 * 86400000;
 const PAYMENT_TYPES = new Set(["balance", "wechat"]);
@@ -126,6 +127,6 @@ export function revokeDelegation(id, requesterId) {
   db.prepare("UPDATE delegations SET status='revoked',updated_at=?,revoked_at=? WHERE id=?").run(now, now, id);
   return true;
 }
-export function paymentTypeFromCode(code) {
-  return Number(code) === 40 ? "balance" : Number(code) === 900 ? "wechat" : null;
+export function paymentTypeFromCode(venueId, code) {
+  return paymentKind(venueId, code);
 }
