@@ -12,6 +12,7 @@ import authApi from "./src/api/auth.js";
 import profileApi from "./src/api/profile.js";
 import discoveryApi from "./src/api/discovery.js";
 import venueConfigApi from "./src/api/venueConfig.js";
+import delegationsApi from "./src/api/delegations.js";
 import { startRiskCalibrationScheduler } from "./src/core/riskCalibration.js";
 
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,7 @@ async function main() {
     return requireUser(req, res, next);
   });
   app.use("/api", profileApi);
+  app.use("/api", delegationsApi);
   app.use("/api", discoveryApi);
   app.use("/api", venueConfigApi);
   app.use("/api/jobs", jobsApi);

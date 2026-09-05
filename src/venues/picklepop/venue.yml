@@ -5,7 +5,7 @@ desc: 银豹(Pospal)后端。余额支付可纯脚本闭环下单。
 backend:
   base: https://wxservice-stg48.pospal.cn
   storeId: 5972810
-  projectUid: "1758968368384975712"
+  projectUid: '1758968368384975712'
   payMethodBalance: 40
   payMethodWechat: 900
 advanceDays:
@@ -17,14 +17,14 @@ release:
     pickle:
       mode: calendar-day-batch
       calendarDaysBefore: 7
-      at: "00:00:00.000"
+      at: '00:00:00.000'
     tennis:
       mode: calendar-day-batch
       calendarDaysBefore: 2
-      at: "00:00:00.000"
+      at: '00:00:00.000'
 bookingHours:
-  start: "08:00"
-  end: "02:00"
+  start: '08:00'
+  end: '02:00'
   overnight: true
   slotMinutes: 60
   slotEndOffsetMinutes: -1
@@ -34,9 +34,27 @@ releaseRetry:
   jitterMs: 300
   maxAttempts: 8
   fastRetry:
-    # Extra wait after a confirmed not-released response. Requests remain serial.
-    intervalsMs: [0, 80, 140, 220, 350, 500, 750]
+    intervalsMs:
+      - 0
+      - 80
+      - 140
+      - 220
+      - 350
+      - 500
+      - 750
     jitterMs: 30
+    minIntervalMs: 1800
+    calibration:
+      extraWaitMs: 1800
+      sampleCount: 6
+      observedMinDispatchGapMs: 2003
+      observedMaxDispatchGapMs: 2012
+      calibratedAt: '2026-08-15T17:27:26.286Z'
+      endpoint: create-appointment
+      target:
+        courtUid: '1762926776857281756'
+        date: '2026-08-16'
+        time: '21:00'
   calibration:
     endpoint: slots-history
     initialIntervalMs: 3000
@@ -48,31 +66,31 @@ releaseRetry:
 courts:
   - name: 匹克球1号
     type: pickle
-    uid: "1762926776857281756"
+    uid: '1762926776857281756'
   - name: 匹克球2号
     type: pickle
-    uid: "1762926785984776840"
+    uid: '1762926785984776840'
   - name: 匹克球3号
     type: pickle
-    uid: "1762926794897651371"
+    uid: '1762926794897651371'
   - name: 匹克球4号
     type: pickle
-    uid: "1762926801731761788"
+    uid: '1762926801731761788'
   - name: 匹克球5号
     type: pickle
-    uid: "1762926808515542995"
+    uid: '1762926808515542995'
   - name: 匹克球6号
     type: pickle
-    uid: "1762926815551294754"
+    uid: '1762926815551294754'
   - name: 网球1号澳网风
     type: tennis
-    uid: "1762927653888739869"
+    uid: '1762927653888739869'
   - name: 网球2号法网风
     type: tennis
-    uid: "1765467643308313996"
+    uid: '1765467643308313996'
   - name: 网球3号法网风
     type: tennis
-    uid: "1767248699319486131"
+    uid: '1767248699319486131'
 credentialSchema:
   - key: PSPLVISITORID
     label: 访客标识
@@ -82,14 +100,14 @@ capture:
   hosts:
     - wxservice-stg48.pospal.cn
   paths:
-    - "*"
+    - '*'
   discoveryPaths:
     - /wxapi/AppointmentVenue/LoadValidClassRoomApptSettingV2
   headers:
     - PSPLVISITORID
   tasks:
     - id: identity
-      label: "\u8eab\u4efd\u51ed\u8bc1"
+      label: 身份凭证
       source: credential
       required: true
       maxAgeHours: 24

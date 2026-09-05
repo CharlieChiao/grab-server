@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dataDir = path.join(root, "data");
-const dbFile = path.join(dataDir, "grab.sqlite");
+const dbFile = process.env.GRAB_DB_FILE || path.join(dataDir, "grab.sqlite");
 fs.mkdirSync(dataDir, { recursive: true });
 export const db = new DatabaseSync(dbFile);
 db.exec(`
@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS venue_discovery_sessions (id TEXT PRIMARY KEY, user_i
 CREATE TABLE IF NOT EXISTS venue_discovery_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, stage TEXT NOT NULL, safe_json TEXT NOT NULL, encrypted_payload TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS venue_discovery_drafts (id TEXT PRIMARY KEY, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, venue_name TEXT NOT NULL, manifest_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_discovery_events_session ON venue_discovery_events(session_id, id);
+CREATE TABLE IF NOT EXISTS delegation_invites (id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, password_salt TEXT NOT NULL, valid_days INTEGER, allowed_payments_json TEXT NOT NULL, expires_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', accepted_by_user_id TEXT, created_at TEXT NOT NULL, accepted_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_delegation_invites_owner ON delegation_invites(owner_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS delegations (id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, delegate_user_id TEXT NOT NULL, valid_until TEXT, allowed_payments_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT, UNIQUE(owner_user_id, delegate_user_id));
+CREATE INDEX IF NOT EXISTS idx_delegations_owner ON delegations(owner_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_delegations_delegate ON delegations(delegate_user_id, status);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
 function ensureUserColumn(name, definition) {
@@ -49,6 +54,17 @@ function ensureDiscoverySessionColumn(name, definition) {
 }
 ensureDiscoverySessionColumn("locked_origin", "TEXT");
 ensureDiscoverySessionColumn("locked_path", "TEXT");
+
+function ensureTableColumn(table, name, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((column) => column.name === name)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+  }
+}
+for (const table of ["jobs", "job_history"]) {
+  ensureTableColumn(table, "created_by_user_id", "TEXT");
+  ensureTableColumn(table, "delegation_id", "TEXT");
+}
 
 export const nowIso = () => new Date().toISOString();
 if (fs.existsSync(legacyJobsFile) && db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n === 0) {

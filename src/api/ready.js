@@ -6,8 +6,15 @@ import { db, nowIso } from "../core/database.js";
 import { calibrateVenue } from "../core/riskCalibration.js";
 import { startUnavailableRetryCalibration, getUnavailableRetryCalibration } from "../core/releaseProbe.js";
 import { notificationStatus, setJobNotifications } from "../core/notifications.js";
+import { getActiveDelegation } from "../core/delegations.js";
 
 const router = express.Router();
+
+function credentialOwner(req) {
+  const requested = String(req.query?.ownerUserId || "").trim();
+  if (!requested || requested === req.user.id) return req.user.id;
+  return getActiveDelegation(requested, req.user.id) ? requested : null;
+}
 
 router.post("/account/claim-legacy", (req, res) => {
   const userId = req.user.id;
@@ -87,8 +94,10 @@ router.get("/venues/:id/reference-price", async (req, res) => {
     const selectedCourtReleased = (slots || []).some((slot) => courtUids.includes(String(slot.uid)));
     return { sourceDate, released: (slots || []).length > 0, selectedCourtReleased, complete: prices.length > 0 && prices.every((price) => price > 0), total: prices.reduce((sum, price) => sum + price, 0) };
   };
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
   try {
-    const cred = getCredential(req.params.id, req.user.id);
+    const cred = getCredential(req.params.id, ownerUserId);
     const todaySlots = await venue.listSlots({ date }, cred);
     const today = summarize(todaySlots, date);
     if (today.selectedCourtReleased) return res.json({ ok: true, ...today, fallback: false });
@@ -105,8 +114,10 @@ router.get("/venues/:id/slots", async (req, res) => {
   if (!venue) return res.status(404).json({ error: "not found" });
   if (!date) return res.status(400).json({ error: "date is required" });
   if (typeof venue.listSlots !== "function") return res.status(501).json({ error: "venue slot pricing is not supported" });
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
   try {
-    const slots = await venue.listSlots({ date }, getCredential(req.params.id, req.user.id));
+    const slots = await venue.listSlots({ date }, getCredential(req.params.id, ownerUserId));
     res.json({ ok: true, venueId: req.params.id, date, released: slots.length > 0, slots });
   } catch (error) {
     res.status(502).json({ error: "查询场地价格失败", detail: String(error.message || error) });
@@ -152,12 +163,18 @@ function captureTaskStatus(venue, venueId, userId, readyResult) {
 router.get("/ready/:venueId", async (req, res) => {
   const venue = getVenue(req.params.venueId);
   if (!venue) return res.status(404).json({ error: "unknown venue" });
-  const result = await doReadyCheck(req.params.venueId, "api", req.user.id);
-  const captureTasks = captureTaskStatus(venue, req.params.venueId, req.user.id, result);
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
+  const result = await doReadyCheck(req.params.venueId, "api", ownerUserId);
+  const captureTasks = captureTaskStatus(venue, req.params.venueId, ownerUserId, result);
   const credentialTask = captureTasks.find((task) => task.source === "credential");
   res.json({ ...result, ok: result.ok === true, venueId: req.params.venueId, credentialUpdatedAt: credentialTask?.updatedAt || null, captureTasks });
 });
-router.get("/ready/:venueId/cache", (req, res) => res.json({ ok: true, cached: readyCache.get(req.params.venueId) || null }));
+router.get("/ready/:venueId/cache", (req, res) => {
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
+  res.json({ ok: true, cached: readyCache.get(`${ownerUserId}:${req.params.venueId}`) || null });
+});
 
 function extractVisitorId(input) {
   const text = String(input || "").trim();
