@@ -5,6 +5,8 @@ import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
+import { finalizeAndRepeatGroup } from "./jobGroups.js";
+import { expireAwaitingPayments, markAwaitingPayment, pollAwaitingPayments, requiresWechatPayment } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -20,6 +22,8 @@ export function stopScheduler() { if (timer) clearInterval(timer); timer = null;
 
 async function tick() {
   const now = Date.now();
+  expireAwaitingPayments(now);
+  pollAwaitingPayments(now).catch((error) => console.warn("[payment-poll]", error.message));
   const jobs = listJobs();
   for (const job of jobs) {
     if (job.status !== "pending" || scheduled.has(job.id)) continue;
@@ -95,13 +99,15 @@ async function runGrab(job, credentialArg, venueArg) {
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs: Date.now() - startedMs } });
-    if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); }
+    const elapsedMs = Date.now() - startedMs;
+    if (requiresWechatPayment(job, result)) { markAwaitingPayment(job, result, elapsedMs); return; }
+    const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
+    if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
   } catch (error) {
     const message = `调度异常: ${String(error?.message || error)}`;
     console.error(`[grab] job=${job.id} ${message}`);
     const completed = updateJob(job.id, { status: "failed", result: { success: false, message, elapsedMs: Date.now() - startedMs } });
-    if (completed) { notifyJobResult(completed).catch((notifyError) => console.warn("[notification]", notifyError.message)); archiveJob(completed.id); }
+    if (completed) { notifyJobResult(completed).catch((notifyError) => console.warn("[notification]", notifyError.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
   } finally { scheduled.delete(job.id); }
 }
 

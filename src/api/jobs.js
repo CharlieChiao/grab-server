@@ -3,6 +3,8 @@ import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob } fro
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
 import { getActiveDelegation, paymentTypeFromCode } from "../core/delegations.js";
+import { requireWritableGroup } from "../core/jobGroups.js";
+import { expireAwaitingPayments, finishPayment } from "../core/paymentLifecycle.js";
 
 const router = express.Router();
 
@@ -28,7 +30,7 @@ function paymentParams(job) {
 }
 function presentJob(job, requesterId) {
   if (!job) return null;
-  const delegatedWechat = job.delegated && Number(job.target?.ext?.payMethod) === 900 && job.result?.success;
+  const delegatedWechat = job.delegated && Number(job.target?.ext?.payMethod) === 900 && job.status === "awaiting_payment";
   const owner = job.userId === requesterId;
   const copy = { ...job, result: job.result ? { ...job.result } : null, paymentRequired: !!delegatedWechat, canPay: false };
   if (copy.result) delete copy.result.raw;
@@ -64,7 +66,7 @@ function validateTarget(target) {
 }
 
 router.post("/", (req, res) => {
-  const { venueId, target, fireAt, fireImmediately, principalUserId } = req.body || {};
+  const { venueId, target, fireAt, fireImmediately, principalUserId, groupUid } = req.body || {};
   if (!venueId) return res.status(400).json({ error: "venueId is required" });
   const venue = getVenue(venueId);
   if (!venue) return res.status(400).json({ error: "unknown venue: " + venueId });
@@ -98,7 +100,11 @@ router.post("/", (req, res) => {
     ownerUserId = principalUserId;
     delegationId = delegation.id;
   }
-  const job = createJob({ userId: ownerUserId, createdByUserId: req.user.id, delegationId, venueId, target, fireAt: finalFireAt });
+  if (groupUid) {
+    try { requireWritableGroup(groupUid, req.user.id); }
+    catch (error) { return res.status(error.statusCode || 400).json({ error: String(error.message || error) }); }
+  }
+  const job = createJob({ userId: ownerUserId, createdByUserId: req.user.id, delegationId, groupUid: groupUid || null, venueId, target, fireAt: finalFireAt });
   res.json({ ok: true, job, fireAtSource });
 });
 
@@ -108,6 +114,15 @@ router.get("/:id", (req, res) => {
   const job = getJob(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: "not found" });
   res.json({ ok: true, job: presentJob(job, req.user.id) });
+});
+router.post("/:id/payment-confirmed", (req, res) => {
+  expireAwaitingPayments();
+  const job = getJob(req.params.id, req.user.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+  if (job.userId !== req.user.id) return res.status(403).json({ error: "微信付款必须由授权用户本人完成" });
+  if (job.status !== "awaiting_payment") return res.status(409).json({ error: "订单当前不是待支付状态" });
+  const completed = finishPayment(job.id);
+  res.json({ ok: true, job: presentJob(completed, req.user.id) });
 });
 router.delete("/:id", (req, res) => res.json({ ok: deleteJob(req.params.id, req.user.id) }));
 

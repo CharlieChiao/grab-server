@@ -6,6 +6,7 @@ import express from "express";
 import { loadVenues } from "./src/core/venueRegistry.js";
 import { startScheduler } from "./src/core/scheduler.js";
 import jobsApi from "./src/api/jobs.js";
+import jobGroupsApi from "./src/api/jobGroups.js";
 import readyApi from "./src/api/ready.js";
 import { requireUser, verifyDeviceRequest } from "./src/core/auth.js";
 import authApi from "./src/api/auth.js";
@@ -36,6 +37,7 @@ async function main() {
   app.use("/api", discoveryApi);
   app.use("/api", venueConfigApi);
   app.use("/api/jobs", jobsApi);
+  app.use("/api/job-groups", jobGroupsApi);
   app.use("/api", readyApi);
 
   app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));

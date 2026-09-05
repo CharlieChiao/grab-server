@@ -29,6 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_delegation_invites_owner ON delegation_invites(ow
 CREATE TABLE IF NOT EXISTS delegations (id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, delegate_user_id TEXT NOT NULL, valid_until TEXT, allowed_payments_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT, UNIQUE(owner_user_id, delegate_user_id));
 CREATE INDEX IF NOT EXISTS idx_delegations_owner ON delegations(owner_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_delegations_delegate ON delegations(delegate_user_id, status);
+CREATE TABLE IF NOT EXISTS task_groups (uid TEXT PRIMARY KEY, created_by_user_id TEXT NOT NULL, name TEXT NOT NULL, success_policy TEXT NOT NULL DEFAULT 'all', repeat_weekly INTEGER NOT NULL DEFAULT 0, iteration INTEGER NOT NULL DEFAULT 1, series_uid TEXT NOT NULL, previous_group_uid TEXT, next_group_uid TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_task_groups_creator ON task_groups(created_by_user_id, created_at DESC);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
 function ensureUserColumn(name, definition) {
@@ -64,6 +66,7 @@ function ensureTableColumn(table, name, definition) {
 for (const table of ["jobs", "job_history"]) {
   ensureTableColumn(table, "created_by_user_id", "TEXT");
   ensureTableColumn(table, "delegation_id", "TEXT");
+  ensureTableColumn(table, "group_uid", "TEXT");
 }
 
 export const nowIso = () => new Date().toISOString();
