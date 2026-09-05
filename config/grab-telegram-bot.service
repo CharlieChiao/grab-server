@@ -1,0 +1,15 @@
+[Unit]
+Description=Grab Telegram Credential Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/grab-server
+EnvironmentFile=/root/grab-server/.telegram-bot.env
+ExecStart=/usr/bin/node tools/telegram-bot.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
