@@ -50,7 +50,7 @@ test("fallback switch reroutes timeout into balance booking attempt", async () =
   const archived = jobs.listHistoryForUser("owner").find((item) => item.id === job.id);
   assert.equal(archived.status, "failed");
   assert.equal(archived.result.paymentStatus, "fallback-failed");
-  assert.match(archived.result.message, /余额兜底未成功: 授权方未允许余额支付/);
+  assert.match(archived.result.message, /余额兜底未成功: unknown venue: picklepop/);
 });
 
 test.after(() => {

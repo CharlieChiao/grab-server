@@ -51,26 +51,54 @@ function releasedBaseMessage(job, now) {
   return `场次已释放，判定支付失败（实际等待 ${formatWait(paymentElapsedMs(job, now))}）`;
 }
 
-// 兜底: 微信支付失败时, 校验授权方仍允许余额支付后, 用其凭证改走余额支付自动重新下单
+// 单次余额下单尝试, 返回 {success, message, ...grab 结果}
+async function attemptBalanceBooking(venue, job, credential) {
+  try {
+    const target = { ...job.target, ext: { ...job.target.ext, payMethod: 40 } };
+    return await enqueueBooking(job.venueId, venue.riskProfile || {}, () => venue.grab(target, credential));
+  } catch (error) {
+    return { success: false, message: String(error?.message || error) };
+  }
+}
+
+// 两层兜底: 先用授权方(B)余额, 不足或未授权时改用创建任务者(A)本人余额, 确保订上场
 export async function fallbackBalanceBooking(job, baseMessage, now) {
   const guard = updateJob(job.id, { status: "running", result: { ...job.result, success: null, message: `${baseMessage}，正在尝试余额支付兜底`, paymentStatus: "fallback" } });
   if (!guard) return null;
-  let result = null;
-  try {
+  const venue = getVenue(job.venueId);
+  let ownerResult = { success: false, message: `unknown venue: ${job.venueId}` };
+  if (venue) {
     const delegation = getActiveDelegation(job.userId, job.createdByUserId);
     let allowed = [];
     try { allowed = JSON.parse(delegation?.allowed_payments_json || "[]"); } catch {}
-    if (!allowed.includes("balance")) throw new Error("授权方未允许余额支付，无法兜底");
-    const venue = getVenue(job.venueId);
-    if (!venue) throw new Error(`unknown venue: ${job.venueId}`);
-    const credential = getCredential(job.venueId, job.userId);
-    const target = { ...job.target, ext: { ...job.target.ext, payMethod: 40 } };
-    result = await enqueueBooking(job.venueId, venue.riskProfile || {}, () => venue.grab(target, credential));
-  } catch (error) {
-    result = { success: false, message: String(error?.message || error) };
+    if (!delegation) ownerResult = { success: false, message: "授权已失效" };
+    else if (!allowed.includes("balance")) ownerResult = { success: false, message: "授权方未允许余额支付" };
+    else {
+      const credential = getCredential(job.venueId, job.userId);
+      ownerResult = credential ? await attemptBalanceBooking(venue, job, credential) : { success: false, message: "授权方未配置场馆凭证" };
+    }
+  }
+  let result = ownerResult;
+  let message = `${baseMessage}，已自动用授权方余额支付兜底成功`;
+  let fallbackBy = "owner";
+  if (ownerResult?.success !== true) {
+    // 第二层: 用创建任务者(A)本人的凭证和余额下单, 花的是 A 自己的钱, 无需 B 的授权
+    if (!venue) { message = `${baseMessage}，余额兜底未成功: ${ownerResult.message}`; fallbackBy = "none"; }
+    else {
+      const ownCredential = getCredential(job.venueId, job.createdByUserId);
+      const ownResult = ownCredential ? await attemptBalanceBooking(venue, job, ownCredential) : { success: false, message: "本人未配置该场馆凭证" };
+      result = ownResult;
+      if (ownResult?.success === true) {
+        message = `${baseMessage}，授权方余额支付未成功（${ownerResult.message}），已改用本人余额支付兜底成功`;
+        fallbackBy = "creator";
+      } else {
+        message = `${baseMessage}，余额兜底未成功: ${ownerResult.message}；本人兜底: ${ownResult.message}`;
+        fallbackBy = "none";
+      }
+    }
   }
   const paid = result?.success === true;
-  const completed = updateJob(job.id, { status: paid ? "done" : "failed", result: { ...job.result, ...result, success: paid, message: paid ? `${baseMessage}，已自动余额支付兜底成功` : `${baseMessage}，余额兜底未成功: ${result?.message || "未知错误"}`, paymentStatus: paid ? "fallback-paid" : "fallback-failed", paymentFallbackAt: new Date(now).toISOString() } });
+  const completed = updateJob(job.id, { status: paid ? "done" : "failed", result: { ...job.result, ...result, success: paid, message, paymentStatus: paid ? "fallback-paid" : "fallback-failed", paymentFallbackBy: fallbackBy, paymentFallbackAt: new Date(now).toISOString() } });
   if (completed) finishAndArchive(completed);
   return completed;
 }
