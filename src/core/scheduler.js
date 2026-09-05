@@ -6,7 +6,7 @@ import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup } from "./jobGroups.js";
-import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresWechatPayment } from "./paymentLifecycle.js";
+import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, requiresWechatPayment } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -23,7 +23,6 @@ export function stopScheduler() { if (timer) clearInterval(timer); timer = null;
 async function tick() {
   const now = Date.now();
   expireAwaitingPayments(now).catch((error) => console.warn("[payment-expire]", String(error?.message || error)));
-  pollAwaitingPayments(now).catch((error) => console.warn("[payment-poll]", error.message));
   const jobs = listJobs();
   for (const job of jobs) {
     if (job.status !== "pending" || scheduled.has(job.id)) continue;
@@ -103,7 +102,7 @@ async function runGrab(job, credentialArg, venueArg) {
     if (requiresWechatPayment(job, result)) { markAwaitingPayment(job, result, elapsedMs); return; }
     if (result?.success !== true && fallbackEnabled(job)) {
       // 余额支付失败(如授权方余额不足)时, 用创建任务者本人余额兜底
-      const fallback = await creatorBalanceFallback(job);
+      const fallback = await creatorBalanceFallback(job, Date.now());
       if (fallback?.success === true) result = { ...fallback, message: `${result?.message || "抢订失败"}，已改用本人余额支付兜底成功` };
       else if (fallback) result = { ...result, message: `${result?.message || "抢订失败"}；本人余额兜底未成功: ${fallback.message}` };
     }

@@ -7,10 +7,6 @@ import { enqueueBooking } from "./requestLimiter.js";
 import { getActiveDelegation } from "./delegations.js";
 
 export const PAYMENT_TIMEOUT_MINUTES = 15;
-// listSlots 是查询接口, releaseProbe 校准以 250ms 间隔探测都未触发限流, 1s 轮询安全; 下单接口的风控阈值约 2s, 由 enqueueBooking 保证
-const PAYMENT_POLL_MS = 1000;
-const polling = new Set();
-const lastPolledAt = new Map();
 
 export function requiresWechatPayment(job, result) {
   return !!job?.delegated && Number(job?.target?.ext?.payMethod) === 900 && !!result?.success && !!result?.orderId;
@@ -41,33 +37,35 @@ function paymentElapsedMs(job, now) {
   return Number(job.result?.paymentTimeoutMinutes || PAYMENT_TIMEOUT_MINUTES) * 60000;
 }
 
-// "X 分 Y 秒" 展示, 与 1s 轮询精度匹配
+// "X 分 Y 秒" 展示, 与秒级判定精度匹配
 function formatWait(ms) {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
 }
 
-function releasedBaseMessage(job, now) {
-  return `场次已释放，判定支付失败（实际等待 ${formatWait(paymentElapsedMs(job, now))}）`;
-}
-
-// 单次余额下单尝试, 返回 {success, message, ...grab 结果}
-async function attemptBalanceBooking(venue, job, credential) {
+// 单次余额下单尝试; sinceMs 用于输出从触发到请求实际发出的延迟(含限流排队时间)
+async function attemptBalanceBooking(venue, job, credential, via, sinceMs) {
   try {
     const target = { ...job.target, ext: { ...job.target.ext, payMethod: 40 } };
-    return await enqueueBooking(job.venueId, venue.riskProfile || {}, () => venue.grab(target, credential));
+    const result = await enqueueBooking(job.venueId, venue.riskProfile || {}, async () => {
+      console.log(`[fallback] job=${job.id} via=${via} dispatched delayFromTrigger=${Date.now() - sinceMs}ms`);
+      return venue.grab(target, credential);
+    });
+    console.log(`[fallback] job=${job.id} via=${via} result=${result?.success ? "ok" : "fail"} ${String(result?.message || "").slice(0, 80)}`);
+    return result;
   } catch (error) {
+    console.warn(`[fallback] job=${job.id} via=${via} error ${String(error?.message || error)}`);
     return { success: false, message: String(error?.message || error) };
   }
 }
 
 // 余额支付抢订失败时(如授权方余额不足), 用创建任务者(A)本人凭证余额兜底下单
-export async function creatorBalanceFallback(job) {
+export async function creatorBalanceFallback(job, sinceMs = Date.now()) {
   const venue = getVenue(job.venueId);
   if (!venue) return null;
   const credential = getCredential(job.venueId, job.createdByUserId);
   if (!credential) return { success: false, message: "本人未配置该场馆凭证" };
-  return attemptBalanceBooking(venue, job, credential);
+  return attemptBalanceBooking(venue, job, credential, "creator", sinceMs);
 }
 
 // 两层兜底: 先用授权方(B)余额, 不足或未授权时改用创建任务者(A)本人余额, 确保订上场
@@ -84,7 +82,7 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
     else if (!allowed.includes("balance")) ownerResult = { success: false, message: "授权方未允许余额支付" };
     else {
       const credential = getCredential(job.venueId, job.userId);
-      ownerResult = credential ? await attemptBalanceBooking(venue, job, credential) : { success: false, message: "授权方未配置场馆凭证" };
+      ownerResult = credential ? await attemptBalanceBooking(venue, job, credential, "owner", now) : { success: false, message: "授权方未配置场馆凭证" };
     }
   }
   let result = ownerResult;
@@ -95,7 +93,7 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
     if (!venue) { message = `${baseMessage}，余额兜底未成功: ${ownerResult.message}`; fallbackBy = "none"; }
     else {
       const ownCredential = getCredential(job.venueId, job.createdByUserId);
-      const ownResult = ownCredential ? await attemptBalanceBooking(venue, job, ownCredential) : { success: false, message: "本人未配置该场馆凭证" };
+      const ownResult = ownCredential ? await attemptBalanceBooking(venue, job, ownCredential, "creator", now) : { success: false, message: "本人未配置该场馆凭证" };
       result = ownResult;
       if (ownResult?.success === true) {
         message = `${baseMessage}，授权方余额支付未成功（${ownerResult.message}），已改用本人余额支付兜底成功`;
@@ -112,29 +110,8 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
   return completed;
 }
 
-export async function pollAwaitingPayments(now = Date.now()) {
-  for (const job of listJobs()) {
-    if (job.status !== "awaiting_payment" || polling.has(job.id) || now - (lastPolledAt.get(job.id) || 0) < PAYMENT_POLL_MS) continue;
-    const expiresAt = Date.parse(job.result?.paymentExpiresAt || "");
-    if (Number.isFinite(expiresAt) && expiresAt <= now) continue;
-    const venue = getVenue(job.venueId);
-    if (!venue || typeof venue.listSlots !== "function") continue;
-    polling.add(job.id);
-    lastPolledAt.set(job.id, now);
-    try {
-      const slots = await venue.listSlots({ date: job.target?.date }, getCredential(job.venueId, job.userId));
-      if (targetSlotsAvailable(job.target, slots)) {
-        if (fallbackEnabled(job)) await fallbackBalanceBooking(job, releasedBaseMessage(job, now), now);
-        else failReleasedPayment(job.id, now);
-      }
-    } catch (error) {
-      console.warn(`[payment-poll] job=${job.id} ${String(error?.message || error)}`);
-    } finally {
-      polling.delete(job.id);
-    }
-  }
-}
-
+// @todo 释放检测已废弃: B 的未支付订单对 B 凭证查询视角仍可能显示可约(误报), 且释放时刻不可靠;
+// 现统一在支付超时(paymentExpiresAt)后才判定失败或兜底, 若未来需要"提前释放提前兜底", 应改用第三方凭证视角查询
 export function targetSlotsAvailable(target, slots) {
   const wanted = Array.isArray(target?.courts) && target.courts.length
     ? target.courts.map((court) => typeof court === "string" ? { court, time: target.time } : { court: court.court, uid: court.courtUid, time: court.time || target.time })
@@ -147,14 +124,6 @@ export function targetSlotsAvailable(target, slots) {
     const available = slot.canAppoint === true || slot.canAppoint === 1 || String(slot.canAppoint).toLowerCase() === "true";
     return sameCourt && sameTime && available;
   }));
-}
-
-function failReleasedPayment(jobId, now) {
-  const job = listJobs().find((item) => item.id === jobId);
-  if (!job || job.status !== "awaiting_payment") return null;
-  const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: releasedBaseMessage(job, now), paymentStatus: "released", paymentElapsedMs: paymentElapsedMs(job, now), paymentReleasedAt: new Date(now).toISOString() } });
-  if (completed) finishAndArchive(completed);
-  return completed;
 }
 
 export async function expireAwaitingPayments(now = Date.now()) {
