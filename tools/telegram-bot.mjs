@@ -9,23 +9,16 @@
  * 命令: /pair(微信扫码绑定) /status /unbind /start /help; 直接发送 .har 文件提取凭证
  */
 import crypto from "node:crypto";
-import dgram from "node:dgram";
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import QRCode from "qrcode";
 
-// systemd sd_notify 心跳: NOTIFY_SOCKET 存在时向 systemd 汇报 READY/WATCHDOG, 卡死超时会被强杀重启
+// systemd sd_notify 心跳: 委托给 systemd-notify 工具(每 25s 一次 fork, 开销可忽略), 卡死超时会被强杀重启
 function sdNotify(text) {
-  const socketPath = process.env.NOTIFY_SOCKET;
-  if (!socketPath) return;
-  try {
-    const client = dgram.createSocket("unix");
-    const message = Buffer.from(text);
-    const target = socketPath.startsWith("@") ? "\0" + socketPath.slice(1) : socketPath;
-    client.on("error", () => { try { client.close(); } catch {} });
-    client.send(message, 0, message.length, target, () => { try { client.close(); } catch {} });
-  } catch {}
+  if (!process.env.NOTIFY_SOCKET) return;
+  try { execFile("systemd-notify", [text], () => {}); } catch {}
 }
 
 const API = "https://api.telegram.org";
