@@ -31,15 +31,26 @@ test("slot availability fallback only matches the booked court and time", () => 
   assert.equal(payments.targetSlotsAvailable(target, [{ uid: "court-a", begin: "2099-01-01 19:00:00", canAppoint: false }]), false);
 });
 
-test("unpaid booking becomes payment-timeout history after its deadline", () => {
+test("unpaid booking becomes payment-timeout history after its deadline", async () => {
   const waiting = jobs.listJobs().find((item) => item.status === "awaiting_payment");
-  payments.expireAwaitingPayments(Date.parse(waiting.result.paymentExpiresAt));
+  await payments.expireAwaitingPayments(Date.parse(waiting.result.paymentExpiresAt));
   assert.equal(jobs.listJobs().some((item) => item.id === waiting.id), false);
   const archived = jobs.listHistoryForUser("owner").find((item) => item.id === waiting.id);
   assert.equal(archived.status, "failed");
   assert.equal(archived.result.paymentStatus, "timeout");
   assert.match(archived.result.message, /实际等待 15 分 0 秒/);
   assert.equal(archived.result.paymentElapsedMs, 900000);
+});
+
+test("fallback switch reroutes timeout into balance booking attempt", async () => {
+  const job = jobs.createJob({ userId: "owner", createdByUserId: "delegate", delegationId: "delegation", venueId: "picklepop", target: { date: "2099-01-01", court: "A", time: "19:00", ext: { payMethod: 900, fallbackBalance: true } } });
+  payments.markAwaitingPayment(job, { success: true, orderId: "order-fb" }, 100, 2_000_000);
+  const waiting = jobs.listJobs().find((item) => item.id === job.id && item.status === "awaiting_payment");
+  await payments.expireAwaitingPayments(Date.parse(waiting.result.paymentExpiresAt));
+  const archived = jobs.listHistoryForUser("owner").find((item) => item.id === job.id);
+  assert.equal(archived.status, "failed");
+  assert.equal(archived.result.paymentStatus, "fallback-failed");
+  assert.match(archived.result.message, /余额兜底未成功: 授权方未允许余额支付/);
 });
 
 test.after(() => {

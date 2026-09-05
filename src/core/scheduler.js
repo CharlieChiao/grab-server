@@ -22,7 +22,7 @@ export function stopScheduler() { if (timer) clearInterval(timer); timer = null;
 
 async function tick() {
   const now = Date.now();
-  expireAwaitingPayments(now);
+  expireAwaitingPayments(now).catch((error) => console.warn("[payment-expire]", String(error?.message || error)));
   pollAwaitingPayments(now).catch((error) => console.warn("[payment-poll]", error.message));
   const jobs = listJobs();
   for (const job of jobs) {

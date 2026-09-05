@@ -116,7 +116,7 @@ router.get("/:id", (req, res) => {
   res.json({ ok: true, job: presentJob(job, req.user.id) });
 });
 router.post("/:id/payment-confirmed", (req, res) => {
-  expireAwaitingPayments();
+  expireAwaitingPayments().catch(() => {});
   const job = getJob(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: "not found" });
   if (job.userId !== req.user.id) return res.status(403).json({ error: "微信付款必须由授权用户本人完成" });
