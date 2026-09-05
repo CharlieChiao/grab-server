@@ -43,12 +43,14 @@ function canonicalJson(value) {
 }
 async function grabRequest(method, apiPath, device, body = {}) {
   const timestamp = String(Date.now());
-  const bodyHash = crypto.createHash("sha256").update(canonicalJson(body)).digest("hex");
+  // GET 不能带 body(fetch 限制), 服务端无 body 请求 req.body 为 {}, 签名按空对象计保持一致
+  const signBody = method === "GET" ? {} : body;
+  const bodyHash = crypto.createHash("sha256").update(canonicalJson(signBody)).digest("hex");
   const signature = crypto.createHmac("sha256", device.secret).update(`${timestamp}.${bodyHash}`).digest("hex");
   const response = await fetch(GRAB_BASE + apiPath, {
     method,
     headers: { "Content-Type": "application/json", "x-device-id": device.deviceId, "x-device-timestamp": timestamp, "x-device-signature": signature },
-    body: method === "GET" ? JSON.stringify(body) : JSON.stringify(body),
+    body: method === "GET" ? undefined : JSON.stringify(body),
   });
   const json = await response.json().catch(() => ({}));
   return { statusCode: response.status, json };
