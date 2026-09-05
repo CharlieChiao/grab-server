@@ -190,10 +190,24 @@ router.post("/credentials/:venueId/ingest", async (req, res) => {
   const venue = getVenue(req.params.venueId);
   if (!venue) return res.status(404).json({ error: "unknown venue" });
   if (!credentialUpdateAllowed(req)) return res.status(401).json({ error: "credential update token invalid" });
-  const input = req.body?.text || req.body?.PSPLVISITORID || req.body?.value;
-  const visitorId = extractVisitorId(input);
-  if (!visitorId) return res.status(400).json({ error: "valid PSPLVISITORID not found" });
-  setCredential(req.params.venueId, { PSPLVISITORID: visitorId }, req.user.id);
+  const schema = venue.meta.raw?.credentialSchema || [];
+  const headersInput = req.body?.headers;
+  if (headersInput && typeof headersInput === "object" && schema.length) {
+    // 新协议: 客户端按 capture.headers 提取的全部字段, 按本场 credentialSchema 的 key 组装存储
+    const credential = {};
+    for (const field of schema) {
+      const value = String(headersInput[field.key] ?? "").trim();
+      if (!value) return res.status(400).json({ error: `missing credential field: ${field.key}` });
+      credential[field.key] = value;
+    }
+    setCredential(req.params.venueId, credential, req.user.id);
+  } else {
+    // 旧协议兼容: 单值文本(仅银豹 PSPLVISITORID 场景)
+    const input = req.body?.text || req.body?.PSPLVISITORID || req.body?.value;
+    const visitorId = extractVisitorId(input);
+    if (!visitorId) return res.status(400).json({ error: "valid PSPLVISITORID not found" });
+    setCredential(req.params.venueId, { PSPLVISITORID: visitorId }, req.user.id);
+  }
   let ready = null;
   try { ready = await doReadyCheck(req.params.venueId, "credential-ingest", req.user.id); } catch {}
   res.json({ ok: true, saved: true, ready: ready ? !!ready.ok : null });
