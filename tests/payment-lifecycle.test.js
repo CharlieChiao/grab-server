@@ -38,8 +38,8 @@ test("unpaid booking becomes payment-timeout history after its deadline", () => 
   const archived = jobs.listHistoryForUser("owner").find((item) => item.id === waiting.id);
   assert.equal(archived.status, "failed");
   assert.equal(archived.result.paymentStatus, "timeout");
-  assert.match(archived.result.message, /实际等待 15 分钟/);
-  assert.equal(archived.result.paymentElapsedMinutes, 15);
+  assert.match(archived.result.message, /实际等待 15 分 0 秒/);
+  assert.equal(archived.result.paymentElapsedMs, 900000);
 });
 
 test.after(() => {

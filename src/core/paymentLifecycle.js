@@ -5,7 +5,8 @@ import { getVenue } from "./venueRegistry.js";
 import { getCredential } from "./credentialStore.js";
 
 export const PAYMENT_TIMEOUT_MINUTES = 15;
-const PAYMENT_POLL_MS = 5000;
+// listSlots 是查询接口, releaseProbe 校准以 250ms 间隔探测都未触发限流, 1s 轮询安全; 下单接口的风控阈值约 2s, 与此无关
+const PAYMENT_POLL_MS = 1000;
 const polling = new Set();
 const lastPolledAt = new Map();
 
@@ -60,17 +61,23 @@ export function targetSlotsAvailable(target, slots) {
   }));
 }
 
-// 以 paymentStartedAt 计算实际等待分钟数, 保留 1 位小数; 无起点时回退到窗口值
-function paymentElapsedMinutes(job, now, fallbackMinutes) {
+// 以 paymentStartedAt 计算实际等待 ms; 无起点时回退到窗口值
+function paymentElapsedMs(job, now, fallbackMinutes) {
   const startedAt = Date.parse(job.result?.paymentStartedAt || "");
-  return Number.isFinite(startedAt) ? Math.max(0, Math.round(((now - startedAt) / 60000) * 10) / 10) : fallbackMinutes;
+  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : fallbackMinutes * 60000;
+}
+
+// "X 分 Y 秒" 展示, 与 1s 轮询精度匹配
+function formatWait(ms) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
 }
 
 function failReleasedPayment(jobId, now) {
   const job = listJobs().find((item) => item.id === jobId);
   if (!job || job.status !== "awaiting_payment") return null;
-  const elapsedMinutes = paymentElapsedMinutes(job, now, Number(job.result?.paymentTimeoutMinutes || PAYMENT_TIMEOUT_MINUTES));
-  const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: `场次已释放，判定支付失败（实际等待 ${elapsedMinutes} 分钟）`, paymentStatus: "released", paymentElapsedMinutes: elapsedMinutes, paymentReleasedAt: new Date(now).toISOString() } });
+  const elapsedMs = paymentElapsedMs(job, now, Number(job.result?.paymentTimeoutMinutes || PAYMENT_TIMEOUT_MINUTES));
+  const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: `场次已释放，判定支付失败（实际等待 ${formatWait(elapsedMs)}）`, paymentStatus: "released", paymentElapsedMs: elapsedMs, paymentReleasedAt: new Date(now).toISOString() } });
   if (completed) finishAndArchive(completed);
   return completed;
 }
@@ -81,8 +88,8 @@ export function expireAwaitingPayments(now = Date.now()) {
     if (job.status !== "awaiting_payment") continue;
     const expiresAt = Date.parse(job.result?.paymentExpiresAt || "");
     if (Number.isFinite(expiresAt) && expiresAt > now) continue;
-    const elapsedMinutes = paymentElapsedMinutes(job, now, Number(job.result?.paymentTimeoutMinutes || PAYMENT_TIMEOUT_MINUTES));
-    const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: `支付超时（实际等待 ${elapsedMinutes} 分钟未完成付款）`, paymentStatus: "timeout", paymentElapsedMinutes: elapsedMinutes, paymentTimedOutAt: new Date(now).toISOString() } });
+    const elapsedMs = paymentElapsedMs(job, now, Number(job.result?.paymentTimeoutMinutes || PAYMENT_TIMEOUT_MINUTES));
+    const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: `支付超时（实际等待 ${formatWait(elapsedMs)} 未完成付款）`, paymentStatus: "timeout", paymentElapsedMs: elapsedMs, paymentTimedOutAt: new Date(now).toISOString() } });
     if (completed) { expired.push(completed); finishAndArchive(completed); }
   }
   return expired;
