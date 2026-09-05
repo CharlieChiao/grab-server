@@ -21,9 +21,10 @@ function sdNotify(text) {
   if (!socketPath) return;
   try {
     const client = dgram.createSocket("unix");
+    const message = Buffer.from(text);
     const target = socketPath.startsWith("@") ? "\0" + socketPath.slice(1) : socketPath;
     client.on("error", () => { try { client.close(); } catch {} });
-    client.send(Buffer.from(text), target, () => { try { client.close(); } catch {} });
+    client.send(message, 0, message.length, target, () => { try { client.close(); } catch {} });
   } catch {}
 }
 
