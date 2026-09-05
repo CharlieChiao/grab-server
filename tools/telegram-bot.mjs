@@ -15,16 +15,15 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import QRCode from "qrcode";
 
-// systemd sd_notify 心报: NOTIFY_SOCKET 存在时向 systemd 汇报 READY/WATCHDOG, 卡死超时会被强杀重启
+// systemd sd_notify 心跳: NOTIFY_SOCKET 存在时向 systemd 汇报 READY/WATCHDOG, 卡死超时会被强杀重启
 function sdNotify(text) {
   const socketPath = process.env.NOTIFY_SOCKET;
   if (!socketPath) return;
   try {
     const client = dgram.createSocket("unix");
-    client.connect(socketPath.startsWith("@") ? "\0" + socketPath.slice(1) : socketPath, () => {
-      client.send(Buffer.from(text), () => client.close());
-    });
-    client.on("error", () => {});
+    const target = socketPath.startsWith("@") ? "\0" + socketPath.slice(1) : socketPath;
+    client.on("error", () => { try { client.close(); } catch {} });
+    client.send(Buffer.from(text), target, () => { try { client.close(); } catch {} });
   } catch {}
 }
 
