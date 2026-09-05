@@ -6,7 +6,7 @@ import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup } from "./jobGroups.js";
-import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, requiresWechatPayment } from "./paymentLifecycle.js";
+import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresWechatPayment } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -23,6 +23,7 @@ export function stopScheduler() { if (timer) clearInterval(timer); timer = null;
 async function tick() {
   const now = Date.now();
   expireAwaitingPayments(now).catch((error) => console.warn("[payment-expire]", String(error?.message || error)));
+  pollAwaitingPayments(now).catch((error) => console.warn("[payment-poll]", error.message));
   const jobs = listJobs();
   for (const job of jobs) {
     if (job.status !== "pending" || scheduled.has(job.id)) continue;

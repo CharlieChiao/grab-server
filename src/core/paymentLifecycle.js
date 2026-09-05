@@ -7,6 +7,10 @@ import { enqueueBooking } from "./requestLimiter.js";
 import { getActiveDelegation } from "./delegations.js";
 
 export const PAYMENT_TIMEOUT_MINUTES = 15;
+// listSlots 是查询接口, releaseProbe 校准以 250ms 间隔探测都未触发限流, 1s 轮询安全
+const PAYMENT_POLL_MS = 1000;
+const polling = new Set();
+const lastPolledAt = new Map();
 
 export function requiresWechatPayment(job, result) {
   return !!job?.delegated && Number(job?.target?.ext?.payMethod) === 900 && !!result?.success && !!result?.orderId;
@@ -44,10 +48,14 @@ function formatWait(ms) {
 }
 
 // 单次余额下单尝试; sinceMs 用于输出从触发到请求实际发出的延迟(含限流排队时间)
+// 限流按下单用户分 scope: B 与 A 是不同凭证用户, 理论上银豹按用户限流, 不应互相排队(@todo 若实测触发"操作太频繁"说明按 IP 限流, 需回退为共享 scope)
 async function attemptBalanceBooking(venue, job, credential, via, sinceMs) {
   try {
     const target = { ...job.target, ext: { ...job.target.ext, payMethod: 40 } };
-    const result = await enqueueBooking(job.venueId, venue.riskProfile || {}, async () => {
+    const baseProfile = venue.riskProfile || {};
+    const userId = via === "owner" ? job.userId : job.createdByUserId;
+    const profile = { ...baseProfile, scopeKey: `${baseProfile.scopeKey || job.venueId}:${userId}` };
+    const result = await enqueueBooking(job.venueId, profile, async () => {
       console.log(`[fallback] job=${job.id} via=${via} dispatched delayFromTrigger=${Date.now() - sinceMs}ms`);
       return venue.grab(target, credential);
     });
@@ -110,8 +118,43 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
   return completed;
 }
 
-// @todo 释放检测已废弃: B 的未支付订单对 B 凭证查询视角仍可能显示可约(误报), 且释放时刻不可靠;
-// 现统一在支付超时(paymentExpiresAt)后才判定失败或兜底, 若未来需要"提前释放提前兜底", 应改用第三方凭证视角查询
+function releasedBaseMessage(job, now) {
+  return `场次已释放，判定支付失败（实际等待 ${formatWait(paymentElapsedMs(job, now))}）`;
+}
+
+// 1s 轮询检测目标场次是否重新可约(=订单已释放): 提前触发兜底或失败, 不必等满 15 分钟
+export async function pollAwaitingPayments(now = Date.now()) {
+  for (const job of listJobs()) {
+    if (job.status !== "awaiting_payment" || polling.has(job.id) || now - (lastPolledAt.get(job.id) || 0) < PAYMENT_POLL_MS) continue;
+    const expiresAt = Date.parse(job.result?.paymentExpiresAt || "");
+    if (Number.isFinite(expiresAt) && expiresAt <= now) continue;
+    const venue = getVenue(job.venueId);
+    if (!venue || typeof venue.listSlots !== "function") continue;
+    polling.add(job.id);
+    lastPolledAt.set(job.id, now);
+    try {
+      const slots = await venue.listSlots({ date: job.target?.date }, getCredential(job.venueId, job.userId));
+      if (targetSlotsAvailable(job.target, slots)) {
+        if (fallbackEnabled(job)) await fallbackBalanceBooking(job, releasedBaseMessage(job, now), now);
+        else failReleasedPayment(job.id, now);
+      }
+    } catch (error) {
+      console.warn(`[payment-poll] job=${job.id} ${String(error?.message || error)}`);
+    } finally {
+      polling.delete(job.id);
+    }
+  }
+}
+
+function failReleasedPayment(jobId, now) {
+  const job = listJobs().find((item) => item.id === jobId);
+  if (!job || job.status !== "awaiting_payment") return null;
+  const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: releasedBaseMessage(job, now), paymentStatus: "released", paymentElapsedMs: paymentElapsedMs(job, now), paymentReleasedAt: new Date(now).toISOString() } });
+  if (completed) finishAndArchive(completed);
+  return completed;
+}
+
+// 判定目标场次是否重新可约(供轮询释放检测使用)
 export function targetSlotsAvailable(target, slots) {
   const wanted = Array.isArray(target?.courts) && target.courts.length
     ? target.courts.map((court) => typeof court === "string" ? { court, time: target.time } : { court: court.court, uid: court.courtUid, time: court.time || target.time })
