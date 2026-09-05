@@ -29,8 +29,8 @@ export function finishPayment(jobId, now = Date.now()) {
   return completed;
 }
 
-// 兜底开关: 仅委托微信支付任务, 由创建任务时前端传入
-function fallbackEnabled(job) {
+// 兜底开关: 仅委托任务, 由创建任务时前端传入
+export function fallbackEnabled(job) {
   return job?.delegated === true && job?.target?.ext?.fallbackBalance === true;
 }
 
@@ -59,6 +59,15 @@ async function attemptBalanceBooking(venue, job, credential) {
   } catch (error) {
     return { success: false, message: String(error?.message || error) };
   }
+}
+
+// 余额支付抢订失败时(如授权方余额不足), 用创建任务者(A)本人凭证余额兜底下单
+export async function creatorBalanceFallback(job) {
+  const venue = getVenue(job.venueId);
+  if (!venue) return null;
+  const credential = getCredential(job.venueId, job.createdByUserId);
+  if (!credential) return { success: false, message: "本人未配置该场馆凭证" };
+  return attemptBalanceBooking(venue, job, credential);
 }
 
 // 两层兜底: 先用授权方(B)余额, 不足或未授权时改用创建任务者(A)本人余额, 确保订上场

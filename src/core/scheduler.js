@@ -6,7 +6,7 @@ import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup } from "./jobGroups.js";
-import { expireAwaitingPayments, markAwaitingPayment, pollAwaitingPayments, requiresWechatPayment } from "./paymentLifecycle.js";
+import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresWechatPayment } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -101,6 +101,12 @@ async function runGrab(job, credentialArg, venueArg) {
     }
     const elapsedMs = Date.now() - startedMs;
     if (requiresWechatPayment(job, result)) { markAwaitingPayment(job, result, elapsedMs); return; }
+    if (result?.success !== true && fallbackEnabled(job)) {
+      // 余额支付失败(如授权方余额不足)时, 用创建任务者本人余额兜底
+      const fallback = await creatorBalanceFallback(job);
+      if (fallback?.success === true) result = { ...fallback, message: `${result?.message || "抢订失败"}，已改用本人余额支付兜底成功` };
+      else if (fallback) result = { ...result, message: `${result?.message || "抢订失败"}；本人余额兜底未成功: ${fallback.message}` };
+    }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
   } catch (error) {
