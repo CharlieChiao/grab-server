@@ -4,12 +4,15 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+WatchdogSec=120
 WorkingDirectory=/root/grab-server
 EnvironmentFile=/root/grab-server/.telegram-bot.env
 ExecStart=/usr/bin/node tools/telegram-bot.mjs
 Restart=always
 RestartSec=3
+# 持续崩溃也无限重试, 不进入 failed 躺平
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

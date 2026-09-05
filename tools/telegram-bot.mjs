@@ -9,10 +9,24 @@
  * 命令: /pair(微信扫码绑定) /status /unbind /start /help; 直接发送 .har 文件提取凭证
  */
 import crypto from "node:crypto";
+import dgram from "node:dgram";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import QRCode from "qrcode";
+
+// systemd sd_notify 心报: NOTIFY_SOCKET 存在时向 systemd 汇报 READY/WATCHDOG, 卡死超时会被强杀重启
+function sdNotify(text) {
+  const socketPath = process.env.NOTIFY_SOCKET;
+  if (!socketPath) return;
+  try {
+    const client = dgram.createSocket("unix");
+    client.connect(socketPath.startsWith("@") ? "\0" + socketPath.slice(1) : socketPath, () => {
+      client.send(Buffer.from(text), () => client.close());
+    });
+    client.on("error", () => {});
+  } catch {}
+}
 
 const API = "https://api.telegram.org";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -226,12 +240,15 @@ if (isMain) {
   if (!TOKEN) { console.error("缺少 TELEGRAM_BOT_TOKEN"); process.exit(1); }
   let offset = 0;
   console.log(`[telegram-bot] started, grab api: ${GRAB_BASE}`);
+  sdNotify("READY=1");
   while (true) {
+    sdNotify("WATCHDOG=1"); // 每轮长轮询(约25s)心跳一次, 超时未心跳则被 systemd 强杀重启
     try {
       const response = await fetch(`${API}/bot${TOKEN}/getUpdates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ offset, timeout: 25, allowed_updates: ["message"] }),
+        signal: AbortSignal.timeout(35000), // fetch 无默认超时, 显式兜底防止事件循环挂起
       });
       const json = await response.json();
       if (!json.ok) throw new Error(`getUpdates: ${response.status}`);
