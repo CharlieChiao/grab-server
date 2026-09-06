@@ -8,9 +8,11 @@ backend:
   orderType: 11
   payMethodWechat: weixin
   payMethodBalance: yue
-# 已校准(2026-09-06): date_list 普通用户可见 7 天, 但下单校验"最大可预定范围"仅 3 天(会员可见 7 天, 可订范围未验证)
+# 已校准(2026-09-06): date_list 普通用户即可见 7 天(真实预约情况), 但下单校验"最大可预定范围"仅 3 天(会员可见 7 天, 可订范围未验证)
+# advanceDays=浏览范围(看场地预约情况), bookableDays=可订范围(创建任务限制)
 advanceDays:
-  tennis: 3
+  tennis: 7
+bookableDays: 3
 release:
   timezone: Asia/Shanghai
   rules:

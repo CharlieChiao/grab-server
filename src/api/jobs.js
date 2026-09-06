@@ -74,6 +74,13 @@ router.post("/", (req, res) => {
   if (!venue) return res.status(400).json({ error: "unknown venue: " + venueId });
   const err = validateTarget(target);
   if (err) return res.status(400).json({ error: err });
+  // 可订范围校验(bookableDays): 部分球场浏览范围大于可订范围(如 In Tennis 会员分级), 提前拦截无效任务
+  const bookableDays = Number(venue.meta?.bookableDays);
+  if (Number.isFinite(bookableDays) && bookableDays > 0) {
+    const bjToday = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const diffDays = Math.round((Date.parse(target.date + "T00:00:00Z") - Date.parse(bjToday + "T00:00:00Z")) / 86400000);
+    if (diffDays > bookableDays) return res.status(400).json({ error: `超出最大可预定范围(最多提前 ${bookableDays} 天), 该日期仅可查看预约情况` });
+  }
 
   let finalFireAt;
   let fireAtSource;

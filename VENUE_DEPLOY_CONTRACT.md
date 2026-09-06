@@ -58,8 +58,10 @@ logo: <图片URL>            # 可选, 球场卡片图标; 来源: HAR 中 syste
 desc: <一句话描述>          # 可选, 球场卡片展示
 backend:                  # 场地私有后端参数(适配器自取, 不展开到 meta 顶层)
   base / storeId / payMethodWechat / payMethodBalance ...
-advanceDays:              # 类型→提前放场天数(整数), 供开抢时刻推算与日期选择范围
+advanceDays:              # 类型→浏览天数(整数), 前端日期选择范围(部分球场 date_list 可见范围大于可订范围)
   <type>: 7
+bookableDays: 3           # 可选, 最大可订天数(距今天); 省略则不限制。会员分级场地必配(如 In Tennis 浏览 7 天/可订 3 天),
+                          # 前后端均按此校验, 超出日期仅可查看预约情况
 release:                  # 放场规则(开抢时刻推算)
   timezone: Asia/Shanghai
   rules:

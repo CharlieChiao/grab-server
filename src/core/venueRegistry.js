@@ -13,7 +13,7 @@
  *        payments{wechat,balance}   本场支付码语义声明(数字或字符串, 供 payCodes.paymentKind 解析)
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
-const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "release", "bookingHours", "courts"];
+const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];
 
 // meta.raw 公开字段自动展开到顶层(适配器显式声明优先), 新球场无需手工抄写 meta
 function normalizeMeta(meta) {
