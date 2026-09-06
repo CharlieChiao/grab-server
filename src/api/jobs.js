@@ -1,4 +1,5 @@
 import express from "express";
+import { db } from "../core/database.js";
 import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob } from "../core/jobStore.js";
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
@@ -109,12 +110,33 @@ router.post("/", (req, res) => {
   res.json({ ok: true, job, fireAtSource });
 });
 
-router.get("/", (req, res) => res.json({ ok: true, jobs: listJobsForUser(req.user.id).map((job) => presentJob(job, req.user.id)) }));
-router.get("/history", (req, res) => res.json({ ok: true, jobs: listHistoryForUser(req.user.id).map((job) => presentJob(job, req.user.id)) }));
+// 定场人(owner)资料映射: 头像 base64 按用户去重, 避免列表里每个任务重复携带
+function collectOwners(jobs) {
+  const owners = {};
+  for (const job of jobs) {
+    const userId = job.userId;
+    if (!userId || owners[userId]) continue;
+    const row = db.prepare("SELECT nickname, avatar_mime, avatar_data FROM users WHERE id=?").get(userId);
+    owners[userId] = row
+      ? { nickname: row.nickname || "微信用户", avatar: row.avatar_data ? `data:${row.avatar_mime || "image/jpeg"};base64,${Buffer.from(row.avatar_data).toString("base64")}` : "" }
+      : { nickname: "微信用户", avatar: "" };
+  }
+  return owners;
+}
+
+router.get("/", (req, res) => {
+  const jobs = listJobsForUser(req.user.id).map((job) => presentJob(job, req.user.id));
+  res.json({ ok: true, jobs, owners: collectOwners(jobs) });
+});
+router.get("/history", (req, res) => {
+  const jobs = listHistoryForUser(req.user.id).map((job) => presentJob(job, req.user.id));
+  res.json({ ok: true, jobs, owners: collectOwners(jobs) });
+});
 router.get("/:id", (req, res) => {
   const job = getJob(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: "not found" });
-  res.json({ ok: true, job: presentJob(job, req.user.id) });
+  const presented = presentJob(job, req.user.id);
+  res.json({ ok: true, job: presented, owners: collectOwners([presented]) });
 });
 router.post("/:id/payment-confirmed", (req, res) => {
   expireAwaitingPayments().catch(() => {});
