@@ -94,6 +94,12 @@ export function extractCredentialsFromHar(har, venues) {
       try { url = new URL(request.url); } catch { continue; }
       if (!wantedHosts.includes(url.hostname.toLowerCase())) continue;
       if (Array.isArray(capture.paths) && capture.paths.length && !pathMatches(url.pathname, capture.paths)) continue;
+      // 店铺隔离: 同域名多店铺(如银豹)按 matchHeaders 的 header 值区分, 防止跨店铺凭证污染
+      const matchHeaders = Object.entries(capture.matchHeaders || {});
+      if (matchHeaders.length) {
+        const matched = matchHeaders.every(([name, value]) => (request.headers || []).some((h) => String(h.name).toLowerCase() === String(name).toLowerCase() && String(h.value).trim() === String(value).trim()));
+        if (!matched) continue;
+      }
       const extracted = {};
       for (const name of capture.headers || []) {
         const header = (request.headers || []).find((item) => String(item.name).toLowerCase() === String(name).toLowerCase());

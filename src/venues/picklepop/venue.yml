@@ -99,6 +99,8 @@ capture:
   enabled: true
   hosts:
     - wxservice-stg48.pospal.cn
+  matchHeaders:            # 店铺隔离: 同一银豹网关多家店铺, 按请求头 STOREID 区分, 防止跨店铺凭证污染
+    STOREID: '5972810'
   paths:
     - '*'
   discoveryPaths:

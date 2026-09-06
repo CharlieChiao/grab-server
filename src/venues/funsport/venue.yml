@@ -1,0 +1,62 @@
+id: funsport
+name: 泛思博特壹方城网球中心
+desc: 银豹(Pospal)后端, 4 片风雨场
+backend:
+  base: https://wxservice-stg48.pospal.cn
+  storeId: 6019568
+  projectUid: '1768357901249380361'
+  payMethodBalance: 40
+  payMethodWechat: 900
+# @todo 放场规则未校准: HAR 实测可见今天+明天(2 天), 暂按提前 2 个日历日推算
+advanceDays:
+  tennis: 2
+release:
+  timezone: Asia/Shanghai
+  rules:
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 2
+      at: '00:00:00.000'
+bookingHours:
+  start: '00:00'
+  end: '23:00'
+  slotMinutes: 60
+  slotEndOffsetMinutes: -1
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 3000
+  jitterMs: 300
+  maxAttempts: 8
+courts:
+  - name: 1号风雨场
+    type: tennis
+    uid: '1772457523974619557'
+  - name: 2号风雨场
+    type: tennis
+    uid: '1772457529933371132'
+  - name: 3号风雨场
+    type: tennis
+    uid: '1772457541177684518'
+  - name: 4号风雨场
+    type: tennis
+    uid: '1772457546249418953'
+credentialSchema:
+  - key: PSPLVISITORID
+    label: 访客标识
+    desc: 从微信小程序抓包获取；ready 检测即验证其有效性。
+capture:
+  enabled: true
+  hosts:
+    - wxservice-stg48.pospal.cn
+  matchHeaders:            # 店铺隔离: 同一银豹网关多家店铺, 按请求头 STOREID 区分
+    STOREID: '6019568'
+  paths:
+    - '*'
+  headers:
+    - PSPLVISITORID
+  tasks:
+    - id: identity
+      label: 身份凭证
+      source: credential
+      required: true
+      maxAgeHours: 24

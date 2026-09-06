@@ -36,7 +36,7 @@ const registry = new Map(); // id -> adapter
 export async function loadVenues() {
   registry.clear();
   if (!fs.existsSync(VENUES_DIR)) return registry;
-  const dirs = fs.readdirSync(VENUES_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
+  const dirs = fs.readdirSync(VENUES_DIR, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_")); // _ 前缀为共享适配器工厂目录
   for (const d of dirs) {
     const entry = path.join(VENUES_DIR, d.name, "index.js");
     if (!fs.existsSync(entry)) continue;
