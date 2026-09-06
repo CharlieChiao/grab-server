@@ -12,14 +12,14 @@ const PAYMENT_POLL_MS = 1000;
 const polling = new Set();
 const lastPolledAt = new Map();
 
-// 委托任务抢订成功且适配器声明"需人工支付"时进入待支付窗口, 不关心具体支付方式/支付码
+// 抢订成功且适配器声明"需人工支付"时进入待支付窗口(委托与非委托任务均适用), 不关心具体支付方式/支付码
 export function requiresManualPayment(job, result) {
-  return !!job?.delegated && !!result?.success && !!result?.orderId && result?.requiresManualPayment === true;
+  return !!result?.success && !!result?.orderId && result?.requiresManualPayment === true;
 }
 
 export function markAwaitingPayment(job, result, elapsedMs, now = Date.now()) {
   const timeoutMs = PAYMENT_TIMEOUT_MINUTES * 60 * 1000;
-  return updateJob(job.id, { status: "awaiting_payment", result: { ...result, success: null, message: "订单已创建，等待授权用户支付", elapsedMs, paymentStatus: "pending", paymentStartedAt: new Date(now).toISOString(), paymentExpiresAt: new Date(now + timeoutMs).toISOString(), paymentTimeoutMinutes: PAYMENT_TIMEOUT_MINUTES } });
+  return updateJob(job.id, { status: "awaiting_payment", result: { ...result, success: null, message: "订单已创建，等待本人微信支付", elapsedMs, paymentStatus: "pending", paymentStartedAt: new Date(now).toISOString(), paymentExpiresAt: new Date(now + timeoutMs).toISOString(), paymentTimeoutMinutes: PAYMENT_TIMEOUT_MINUTES } });
 }
 
 export function finishPayment(jobId, now = Date.now()) {

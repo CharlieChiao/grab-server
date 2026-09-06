@@ -17,6 +17,10 @@ function delegatedWechatJob() {
 test("delegated manual-payment booking remains active while awaiting payment", () => {
   const job = delegatedWechatJob();
   assert.equal(payments.requiresManualPayment(job, { success: true, orderId: "order-1", requiresManualPayment: true }), true);
+  // 非委托(自己下单)的微信支付任务同样进入待支付窗口
+  const own = jobs.createJob({ userId: "owner", createdByUserId: "owner", venueId: "picklepop", target: { date: "2099-01-01", court: "A", time: "19:00", ext: { payMethod: 900 } } });
+  assert.equal(own.delegated, false);
+  assert.equal(payments.requiresManualPayment(own, { success: true, orderId: "order-own", requiresManualPayment: true }), true);
   const waiting = payments.markAwaitingPayment(job, { success: true, orderId: "order-1", requiresManualPayment: true }, 321, 1_000_000);
   assert.equal(waiting.status, "awaiting_payment");
   assert.equal(waiting.result.paymentTimeoutMinutes, 15);

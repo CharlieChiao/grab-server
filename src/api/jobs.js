@@ -32,7 +32,7 @@ function paymentParams(job) {
 }
 function presentJob(job, requesterId) {
   if (!job) return null;
-  const delegatedManual = job.delegated && job.status === "awaiting_payment"; // awaiting 状态即表示需授权方人工支付
+  const delegatedManual = job.status === "awaiting_payment"; // awaiting 状态即表示需本人人工支付(委托与非委托均适用)
   const owner = job.userId === requesterId;
   const copy = { ...job, result: job.result ? { ...job.result } : null, paymentRequired: !!delegatedManual, canPay: false };
   if (copy.result) delete copy.result.raw;
