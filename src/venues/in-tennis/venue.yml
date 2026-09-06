@@ -1,5 +1,6 @@
 id: in-tennis
 name: In Tennis
+logo: https://dopeiyun.oss-cn-shenzhen.aliyuncs.com/attach/2024/11/a8cb6202411030906084426.png
 desc: In Tennis 网球中心(CRMEB 场地预约系统)
 backend:
   base: https://in.tennis168.vip
