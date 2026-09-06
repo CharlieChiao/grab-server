@@ -111,19 +111,19 @@ router.post("/", (req, res) => {
 });
 
 // 定场人(owner)资料映射: 头像走稳定 URL(image 标签可缓存, 轮询重渲染不闪烁), v 参数在换头像后破缓存
+// avatar(data URI)为旧版前端兼容字段, 小程序发版后可移除
 function collectOwners(jobs) {
   const owners = {};
   for (const job of jobs) {
     const userId = job.userId;
     if (!userId || owners[userId]) continue;
-    const row = db.prepare("SELECT nickname, avatar_data, profile_updated_at FROM users WHERE id=?").get(userId);
+    const row = db.prepare("SELECT nickname, avatar_mime, avatar_data, profile_updated_at FROM users WHERE id=?").get(userId);
     const version = row?.profile_updated_at ? Date.parse(row.profile_updated_at) : 0;
-    owners[userId] = row
-      ? {
-        nickname: row.nickname || "微信用户",
-        avatarUrl: row.avatar_data ? `/api/users/${userId}/avatar?v=${version}` : null,
-      }
-      : { nickname: "微信用户", avatarUrl: null };
+    owners[userId] = {
+      nickname: row?.nickname || "微信用户",
+      avatarUrl: row?.avatar_data ? `/api/users/${userId}/avatar?v=${version}` : null,
+      avatar: row?.avatar_data ? `data:${row.avatar_mime || "image/jpeg"};base64,${Buffer.from(row.avatar_data).toString("base64")}` : "",
+    };
   }
   return owners;
 }
