@@ -28,7 +28,7 @@ async function main() {
   // 璺敱
   app.use("/api/auth", authApi);
   app.use("/api", (req, res, next) => {
-    if (req.path === "/venues" || /^\/venues\/[^/]+$/.test(req.path)) return next();
+    if (req.path === "/venues" || /^\/venues\/[^/]+$/.test(req.path) || /^\/users\/[^/]+\/avatar$/.test(req.path)) return next();
     const deviceUser = verifyDeviceRequest(req); if (deviceUser) { req.user = deviceUser; req.deviceAuthenticated = true; return next(); }
     return requireUser(req, res, next);
   });

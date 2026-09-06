@@ -110,16 +110,20 @@ router.post("/", (req, res) => {
   res.json({ ok: true, job, fireAtSource });
 });
 
-// 定场人(owner)资料映射: 头像 base64 按用户去重, 避免列表里每个任务重复携带
+// 定场人(owner)资料映射: 头像走稳定 URL(image 标签可缓存, 轮询重渲染不闪烁), v 参数在换头像后破缓存
 function collectOwners(jobs) {
   const owners = {};
   for (const job of jobs) {
     const userId = job.userId;
     if (!userId || owners[userId]) continue;
-    const row = db.prepare("SELECT nickname, avatar_mime, avatar_data FROM users WHERE id=?").get(userId);
+    const row = db.prepare("SELECT nickname, avatar_data, profile_updated_at FROM users WHERE id=?").get(userId);
+    const version = row?.profile_updated_at ? Date.parse(row.profile_updated_at) : 0;
     owners[userId] = row
-      ? { nickname: row.nickname || "微信用户", avatar: row.avatar_data ? `data:${row.avatar_mime || "image/jpeg"};base64,${Buffer.from(row.avatar_data).toString("base64")}` : "" }
-      : { nickname: "微信用户", avatar: "" };
+      ? {
+        nickname: row.nickname || "微信用户",
+        avatarUrl: row.avatar_data ? `/api/users/${userId}/avatar?v=${version}` : null,
+      }
+      : { nickname: "微信用户", avatarUrl: null };
   }
   return owners;
 }

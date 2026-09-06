@@ -22,6 +22,16 @@ router.get("/me", (req, res) => {
   res.json(profileResponse(row));
 });
 
+// 定场人头像(image 标签可直连, 免认证; userId 为不可猜测哈希)。v 参数为头像版本号用于缓存更新
+router.get("/users/:userId/avatar", (req, res) => {
+  const row = db.prepare("SELECT avatar_mime, avatar_data, profile_updated_at FROM users WHERE id=?").get(String(req.params.userId || ""));
+  if (!row?.avatar_data) return res.status(404).end();
+  res.setHeader("Content-Type", row.avatar_mime || "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  if (req.query.v) res.setHeader("ETag", `"${req.query.v}"`);
+  res.end(Buffer.from(row.avatar_data));
+});
+
 router.put("/me", (req, res) => {
   const nickname = String(req.body?.nickname || "").trim().slice(0, 40);
   const mime = String(req.body?.avatarMime || "image/jpeg").toLowerCase();
