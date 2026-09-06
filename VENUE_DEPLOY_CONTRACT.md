@@ -52,15 +52,50 @@
 ### venue.yml 声明式配置(参考 venues/picklepop)
 
 ```yaml
-id / name / logo / desc
-backend:            # 场地私有后端参数(适配器自取)
-advanceDays:        # 类型→提前放场天数
-release:            # 放场规则(时区/模式/时刻)
-bookingHours:       # 营业时段与 slot 粒度
-releaseRetry:       # 放场重试策略(间隔/校准数据)
-courts:             # 场地清单(name/type/uid)
-credentialSchema:   # 凭证字段声明(key/label/desc/maxAgeHours), ingest 按此组装存储
-capture:            # CourtCapture 抓包配置(见 COURTCAPTURE_GUIDE.md)
+id: <venue-id>            # 必填, 即目录名
+name: <展示名>             # 必填
+logo: <图片URL>            # 可选, 球场卡片图标; 来源: HAR 中 system_store.image 或人工找图链
+desc: <一句话描述>          # 可选, 球场卡片展示
+backend:                  # 场地私有后端参数(适配器自取, 不展开到 meta 顶层)
+  base / storeId / payMethodWechat / payMethodBalance ...
+advanceDays:              # 类型→提前放场天数(整数), 供开抢时刻推算与日期选择范围
+  <type>: 7
+release:                  # 放场规则(开抢时刻推算)
+  timezone: Asia/Shanghai
+  rules:
+    <type>:
+      mode: calendar-day-batch
+      calendarDaysBefore: 7      # 提前 N 个日历日
+      at: '00:00:00.000'        # 当天放场时刻
+bookingHours:             # 营业时段与时段粒度(前端时段格子生成)
+  start: '07:00'          # 最早时段开始
+  end: '23:00'            # 最晚时段结束(跨天加 overnight: true)
+  overnight: false        # 跨零点营业
+  slotMinutes: 60         # 时段粒度(分钟), 亦用于下单时段区间推算
+releaseRetry:             # 放场重试策略(可选, 见 riskProfile)
+courts:                   # 场地清单(前端场地选择/统计/下单 courtUid)
+  - name: 1号             # 展示名
+    type: tennis          # 类型(pickle/tennis, 前端统计与放场规则匹配)
+    uid: '119'            # 上游场地唯一标识(字符串), 下单与 slot 匹配的关键
+credentialSchema:         # 凭证字段声明, ingest/ CourtCapture 按此组装存储
+  - key: Authori-zation   # 上游凭证 header 名(区分大小写按实际)
+    label: 登录令牌        # 前端展示
+    desc: 抓包获取说明
+    maxAgeHours: 720      # 可选, 凭证过期提醒
+capture:                  # CourtCapture/bot 抓包配置(见 COURTCAPTURE_GUIDE.md)
+  enabled / hosts / paths / headers / discoveryPaths / tasks
+```
+
+**meta 展开规则**: `advanceDays/release/bookingHours/courts` 四个公开字段由 venueRegistry 注册时自动从 `meta.raw` 展开到顶层(适配器显式声明优先), 前端直接读 `venue.courts` 等; `backend/capture` 等敏感段只保留在 `venue.raw`。
+
+**slot 归一化形状**(listSlots 返回, 契约强约束):
+
+```js
+{ uid, court, begin, canAppoint, cost }
+// uid: 场地唯一标识(与 venue.yml courts.uid 对应)
+// court: 场地名; begin: "YYYY-MM-DD HH:mm" 开始时刻
+// canAppoint: 布尔, 可约(供待支付释放轮询判定)
+// cost: 数字, 场次价格(供参考价接口 reference-price 汇总)
 ```
 
 ## 服务端存储

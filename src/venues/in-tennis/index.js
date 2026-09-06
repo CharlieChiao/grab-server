@@ -71,7 +71,7 @@ async function ready(cred) {
 }
 
 // CRMEB date_list: data.children[](时段 timeKey/time) × children[](场地 space_id/price/active)
-// 归一化到统一 slot 形状 {uid, court, begin, canAppoint}, 额外保留 price/timeKey/time 供下单构造
+// 归一化到统一 slot 形状 {uid, court, begin, canAppoint, cost}, 额外保留 price/timeKey/time 供下单构造
 async function listSlots(query, cred) {
   const { status, json } = await get(`/api/sports/space/date_list?date=${query.date}&store_id=${B.storeId}`, cred);
   if (status !== 200 || json?.status !== 200) throw new Error(json?.msg || `HTTP ${status}`);
@@ -83,6 +83,7 @@ async function listSlots(query, cred) {
         court: space.name,
         begin: `${query.date} ${String(hour.timeKey).padStart(2, "0")}:00`,
         canAppoint: String(space.active) === "1" && Number(space.price) > 0,
+        cost: Number(space.price) || 0,
         price: String(space.price),
         timeKey: Number(hour.timeKey),
         time: String(hour.time || ""),
