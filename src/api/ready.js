@@ -73,7 +73,7 @@ router.post("/venues/:id/discover-capture", (req, res) => {
   }
   res.json({ ok: true, discovered: discovered.courts || [] });
 });
-router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues() }));
+router.get("/venues", (req, res) => res.json({ ok: true, venues: listVenues().map((venue) => ({ ...venue, payments: getVenue(venue.id)?.payments || null })) }));
 router.get("/venues/:id/reference-price", async (req, res) => {
   const venue = getVenue(req.params.id);
   const date = String(req.query.date || "").trim();

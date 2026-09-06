@@ -1,0 +1,58 @@
+id: in-tennis
+name: In Tennis
+desc: In Tennis 网球中心(CRMEB 场地预约系统)
+backend:
+  base: https://in.tennis168.vip
+  storeId: 76
+  orderType: 11
+  payMethodWechat: weixin
+  payMethodBalance: yue
+# @todo 放场规则未校准: date_list 实测至少可查次日, 暂按提前 7 个日历日推算开抢时刻
+advanceDays:
+  tennis: 7
+release:
+  timezone: Asia/Shanghai
+  rules:
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 7
+      at: '00:00:00.000'
+bookingHours:
+  start: '07:00'
+  end: '23:00'
+  slotMinutes: 60
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 2000
+  maxAttempts: 6
+courts:
+  - name: 1号
+    type: tennis
+    uid: '119'
+  - name: 2号
+    type: tennis
+    uid: '120'
+  - name: 3号
+    type: tennis
+    uid: '121'
+  - name: 4号
+    type: tennis
+    uid: '143'
+credentialSchema:
+  - key: Authori-zation
+    label: 登录令牌
+    desc: 从微信小程序抓包获取(Bearer JWT)；ready 检测即验证其有效性。
+capture:
+  enabled: true
+  hosts:
+    - in.tennis168.vip
+  paths:
+    - '*'
+  headers:
+    - Authori-zation
+  tasks:
+    - id: identity
+      label: 身份凭证
+      source: credential
+      required: true
+      maxAgeHours: 720
