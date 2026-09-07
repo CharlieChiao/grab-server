@@ -51,7 +51,8 @@ async function runGrab(job, credentialArg, venueArg) {
   if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
   const credential = credentialArg || getCredential(job.venueId, job.userId);
   const adapterProfile = venue.riskProfile || {};
-  const scopeKey = adapterProfile.scopeKey || job.venueId;
+  // 限流/冷却 scope 统一为 店铺+凭证用户(与 enqueueBooking 的 limiterProfile 一致)
+  const scopeKey = `${adapterProfile.scopeKey || job.venueId}:${job.userId}`;
   let profile = getRiskProfile(job.venueId, adapterProfile);
   const maxAttempts = Math.min(60, Math.max(Number(profile.booking.maxRetry || 5), Number(adapterProfile.booking?.maxRetry || 0), Number(job.target.ext?.maxRetry || 0)));
   const retryPolicy = venue.meta?.raw?.releaseRetry || {};
@@ -74,7 +75,10 @@ async function runGrab(job, credentialArg, venueArg) {
       const releaseInterval = hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval;
       try {
         const useReleaseLimiter = releasePending || (attempt === 1 && !!job.fireAt && hasCalibratedReleaseInterval);
-        result = await enqueueBooking(job.venueId, adapterProfile, async () => {
+        // 限流按 店铺+凭证用户 分队列: 银豹风控是用户(凭证)级, 同凭证的主抢订与兜底必须共享冷却,
+        // 不同凭证(B→A 余额兜底)保持并行, 避免兜底紧跟主抢订触发"操作太频繁"
+        const limiterProfile = { ...adapterProfile, scopeKey: `${adapterProfile.scopeKey || job.venueId}:${job.userId}` };
+        result = await enqueueBooking(job.venueId, limiterProfile, async () => {
           dispatchedMs = Date.now();
           const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
           console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${attempt} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchedMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchedMs - plannedMs}`);
