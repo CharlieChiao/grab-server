@@ -159,8 +159,8 @@ router.post("/:id/payment-confirmed", (req, res) => {
   res.json({ ok: true, job: presentJob(completed, req.user.id) });
 });
 router.put("/:id", (req, res) => {
-  const { fireAt, cost } = req.body || {};
-  const result = editJob(req.params.id, req.user.id, { fireAt, cost });
+  const { fireAt, cost, groupUid, fallbackBalance } = req.body || {};
+  const result = editJob(req.params.id, req.user.id, { fireAt, cost, groupUid, fallbackBalance });
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true, job: presentJob(result.job, req.user.id) });
 });

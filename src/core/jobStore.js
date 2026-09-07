@@ -59,8 +59,8 @@ export function archiveJob(id) {
     return rowToJob({ ...row, archived_at: archivedAt });
   } catch (error) { try { db.exec("ROLLBACK"); } catch {} throw error; }
 }
-// 编辑待执行任务的开抢时间与价格(仅 pending 状态, 场地/时段变更需重建任务)
-export function editJob(id, userId, { fireAt, cost } = {}) {
+// 编辑待执行任务的开抢时间/价格/任务组/兜底开关(仅 pending 状态, 场地/时段变更需重建任务)
+export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance } = {}) {
   const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
   if (!row) return { error: "not found" };
   if (row.status !== "pending") return { error: "仅待执行任务可编辑" };
@@ -70,6 +70,10 @@ export function editJob(id, userId, { fireAt, cost } = {}) {
     if (!Number.isFinite(costNum) || costNum <= 0) return { error: "价格必须是正数" };
     target.cost = costNum;
     target.ext = { ...(target.ext || {}), totalCost: costNum };
+    if (Array.isArray(target.courts)) target.courts = target.courts.map((c) => ({ ...c, cost: costNum }));
+  }
+  if (fallbackBalance !== undefined) {
+    target.ext = { ...(target.ext || {}), fallbackBalance: !!fallbackBalance };
   }
   let fireAtValue = row.fire_at;
   if (fireAt !== undefined) {
@@ -80,7 +84,16 @@ export function editJob(id, userId, { fireAt, cost } = {}) {
       fireAtValue = new Date(t).toISOString();
     }
   }
-  db.prepare("UPDATE jobs SET fire_at=?, target_json=?, updated_at=? WHERE id=?").run(fireAtValue, JSON.stringify(target), nowIso(), id);
+  let groupUidValue = row.group_uid;
+  if (groupUid !== undefined) {
+    if (groupUid === null || groupUid === "") groupUidValue = null;
+    else {
+      const group = db.prepare("SELECT uid FROM task_groups WHERE uid=? AND created_by_user_id=? AND status='active'").get(groupUid, userId);
+      if (!group) return { error: "任务组不存在或已停止" };
+      groupUidValue = groupUid;
+    }
+  }
+  db.prepare("UPDATE jobs SET fire_at=?, target_json=?, group_uid=?, updated_at=? WHERE id=?").run(fireAtValue, JSON.stringify(target), groupUidValue, nowIso(), id);
   return { job: getJob(id, userId) };
 }
 
