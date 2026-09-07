@@ -46,6 +46,33 @@ function schedulePreciseFire(job, fireMs) {
   console.log(`[schedule] job=${job.id} fireAt=${new Date(fireMs).toISOString()}`);
 }
 
+// 下单报"不可约"时回查 listSlots, 把银豹的细分原因(已被预约/已被锁场/已被排课)附加到失败消息
+export async function refineUnavailableReason(venue, job, credential, message) {
+  if (!/不可约|不可预约/.test(String(message || ""))) return null;
+  if (typeof venue?.listSlots !== "function") return null;
+  try {
+    const slots = await venue.listSlots({ date: job.target?.date }, credential);
+    const wanted = Array.isArray(job.target?.courts) && job.target.courts.length
+      ? job.target.courts.map((c) => ({ uid: c.courtUid, court: c.court, time: c.time || job.target.time }))
+      : [{ uid: job.target?.courtUid, court: job.target?.court, time: job.target?.time }];
+    const reasons = [];
+    for (const slot of slots) {
+      for (const w of wanted) {
+        const courtMatch = w.uid ? String(slot.uid) === String(w.uid) : String(slot.court || "") === String(w.court || "");
+        const timeMatch = String(slot.begin || "").slice(11, 16) === String(w.time || "").slice(0, 5);
+        if (courtMatch && timeMatch && !slot.canAppoint) {
+          const match = /(\d{2}:\d{2})-\d{2}:\d{2}场次(.+)$/.exec(String(slot.message || ""));
+          const text = match ? `${match[1]}${match[2]}` : String(slot.message || "不可约");
+          if (!reasons.includes(text)) reasons.push(text);
+        }
+      }
+    }
+    return reasons.length ? reasons.join("、") : null;
+  } catch {
+    return null;
+  }
+}
+
 async function runGrab(job, credentialArg, venueArg) {
   const venue = venueArg || getVenue(job.venueId);
   if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
@@ -110,6 +137,11 @@ async function runGrab(job, credentialArg, venueArg) {
       const fallback = await creatorBalanceFallback(job, Date.now());
       if (fallback?.success === true) result = { ...fallback, message: `${result?.message || "抢订失败"}，已改用本人余额支付兜底成功` };
       else if (fallback) result = { ...result, message: `${result?.message || "抢订失败"}；本人余额兜底未成功: ${fallback.message}` };
+    }
+    if (result?.success !== true) {
+      // 下单"不可约"失败后回查场次状态细分原因: 已被预约=真被人抢走(脚本慢), 已被锁场/排课=时段本身不可抢(等放场无意义)
+      const reason = await refineUnavailableReason(venue, job, credential, result?.message);
+      if (reason) result = { ...result, message: `${result.message}（${reason}）` };
     }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
