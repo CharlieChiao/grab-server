@@ -59,6 +59,31 @@ export function archiveJob(id) {
     return rowToJob({ ...row, archived_at: archivedAt });
   } catch (error) { try { db.exec("ROLLBACK"); } catch {} throw error; }
 }
+// 编辑待执行任务的开抢时间与价格(仅 pending 状态, 场地/时段变更需重建任务)
+export function editJob(id, userId, { fireAt, cost } = {}) {
+  const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "pending") return { error: "仅待执行任务可编辑" };
+  const target = JSON.parse(row.target_json);
+  if (cost !== undefined && cost !== null) {
+    const costNum = Number(cost);
+    if (!Number.isFinite(costNum) || costNum <= 0) return { error: "价格必须是正数" };
+    target.cost = costNum;
+    target.ext = { ...(target.ext || {}), totalCost: costNum };
+  }
+  let fireAtValue = row.fire_at;
+  if (fireAt !== undefined) {
+    if (fireAt === null || fireAt === "") fireAtValue = null;
+    else {
+      const t = Date.parse(fireAt);
+      if (!Number.isFinite(t)) return { error: "无效的开抢时间" };
+      fireAtValue = new Date(t).toISOString();
+    }
+  }
+  db.prepare("UPDATE jobs SET fire_at=?, target_json=?, updated_at=? WHERE id=?").run(fireAtValue, JSON.stringify(target), nowIso(), id);
+  return { job: getJob(id, userId) };
+}
+
 export function deleteJob(id, userId) {
   const active = db.prepare("DELETE FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").run(id, userId, userId).changes;
   const history = db.prepare("DELETE FROM job_history WHERE id=? AND (user_id=? OR created_by_user_id=?)").run(id, userId, userId).changes;

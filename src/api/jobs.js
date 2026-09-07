@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../core/database.js";
-import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob } from "../core/jobStore.js";
+import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob, editJob } from "../core/jobStore.js";
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
 import { getActiveDelegation, paymentTypeFromCode } from "../core/delegations.js";
@@ -157,6 +157,12 @@ router.post("/:id/payment-confirmed", (req, res) => {
   if (job.status !== "awaiting_payment") return res.status(409).json({ error: "订单当前不是待支付状态" });
   const completed = finishPayment(job.id);
   res.json({ ok: true, job: presentJob(completed, req.user.id) });
+});
+router.put("/:id", (req, res) => {
+  const { fireAt, cost } = req.body || {};
+  const result = editJob(req.params.id, req.user.id, { fireAt, cost });
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true, job: presentJob(result.job, req.user.id) });
 });
 router.delete("/:id", (req, res) => res.json({ ok: deleteJob(req.params.id, req.user.id) }));
 
