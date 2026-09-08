@@ -169,6 +169,35 @@ async function runGrab(job, credentialArg, venueArg) {
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
     const elapsedMs = Date.now() - startedMs;
+    // 主目标失败后依次尝试备选目标(同球场同凭证, date/payMethod 沿用主任务, 成功即停)
+    // 备选同样走限流队列(同 scope 排队), 其结果继续进入待支付/兜底/终态统一流程
+    const alternates = Array.isArray(job.target?.alternates) ? job.target.alternates : [];
+    if (result?.success !== true && alternates.length) {
+      for (let i = 0; i < alternates.length; i++) {
+        const alt = alternates[i];
+        const altTarget = { ...job.target, alternates: undefined };
+        if (alt.court != null) altTarget.court = alt.court;
+        if (Array.isArray(alt.courts)) altTarget.courts = alt.courts;
+        if (alt.courtUid != null) altTarget.courtUid = alt.courtUid;
+        if (alt.time) altTarget.time = alt.time;
+        if (alt.cost != null) { altTarget.cost = alt.cost; altTarget.ext = { ...altTarget.ext, totalCost: alt.cost }; }
+        let altResult = null;
+        try {
+          const limiterProfile = { ...adapterProfile, scopeKey: `${adapterProfile.scopeKey || job.venueId}:${job.userId}` };
+          altResult = await enqueueBooking(job.venueId, limiterProfile, async () => {
+            console.log(`[dispatch] job=${job.id} alternate=${i + 1}/${alternates.length} at=${new Date().toISOString()}`);
+            return venue.grab(altTarget, credential);
+          });
+        } catch (e) { altResult = { success: false, message: String(e.message || e) }; }
+        const altClass = altResult?.success === true ? "success" : "alternate-failed";
+        recordAttempt(job, 100 + i + 1, Date.now(), altClass, 0, `[备选${i + 1}] ${altResult?.message || ""}`);
+        if (altResult?.success === true) {
+          const altDesc = alt.court || (Array.isArray(alt.courts) ? alt.courts.map((c) => c.court || c).join("+") : "") || "";
+          result = { ...altResult, message: `主目标失败（${result?.message || "未知"}），已改用备选 ${altDesc} ${alt.time || ""} 下单成功：${altResult.message || ""}` };
+          break;
+        }
+      }
+    }
     if (requiresManualPayment(job, result)) { markAwaitingPayment(job, result, elapsedMs); return; }
     if (result?.success !== true && fallbackEnabled(job)) {
       // 余额支付失败(如授权方余额不足)时, 用创建任务者本人余额兜底

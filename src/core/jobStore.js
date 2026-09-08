@@ -97,6 +97,42 @@ export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance } 
   return { job: getJob(id, userId) };
 }
 
+// 备选目标: 与主任务同球场同凭证, 主目标失败后依次尝试; date/payMethod/ext 沿用主任务
+function normalizeAlternate(alternate) {
+  if (!alternate || typeof alternate !== "object") return { error: "备选内容无效" };
+  const value = { court: alternate.court, courts: Array.isArray(alternate.courts) ? alternate.courts : undefined, time: alternate.time, cost: alternate.cost };
+  const hasCourt = value.court || (value.courts && value.courts.length);
+  if (!hasCourt) return { error: "备选缺少场地" };
+  if (!value.time) return { error: "备选缺少时段" };
+  if (value.cost !== undefined && (!Number.isFinite(Number(value.cost)) || Number(value.cost) <= 0)) return { error: "备选价格必须是正数" };
+  return { value };
+}
+
+export function addJobAlternate(id, userId, alternate) {
+  const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "pending") return { error: "仅待执行任务可添加备选" };
+  const target = JSON.parse(row.target_json);
+  const alt = normalizeAlternate(alternate);
+  if (alt.error) return alt;
+  target.alternates = [...(Array.isArray(target.alternates) ? target.alternates : []), alt.value];
+  db.prepare("UPDATE jobs SET target_json=?, updated_at=? WHERE id=?").run(JSON.stringify(target), nowIso(), id);
+  return { job: getJob(id, userId) };
+}
+
+export function removeJobAlternate(id, userId, index) {
+  const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "pending") return { error: "仅待执行任务可修改备选" };
+  const target = JSON.parse(row.target_json);
+  const alternates = Array.isArray(target.alternates) ? target.alternates : [];
+  if (!Number.isInteger(Number(index)) || Number(index) < 0 || Number(index) >= alternates.length) return { error: "备选不存在" };
+  alternates.splice(Number(index), 1);
+  target.alternates = alternates;
+  db.prepare("UPDATE jobs SET target_json=?, updated_at=? WHERE id=?").run(JSON.stringify(target), nowIso(), id);
+  return { job: getJob(id, userId) };
+}
+
 export function deleteJob(id, userId) {
   const active = db.prepare("DELETE FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").run(id, userId, userId).changes;
   const history = db.prepare("DELETE FROM job_history WHERE id=? AND (user_id=? OR created_by_user_id=?)").run(id, userId, userId).changes;

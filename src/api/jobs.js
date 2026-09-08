@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../core/database.js";
-import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob, editJob } from "../core/jobStore.js";
+import { listJobsForUser, listHistoryForUser, getJob, createJob, deleteJob, editJob, addJobAlternate, removeJobAlternate } from "../core/jobStore.js";
 import { getVenue } from "../core/venueRegistry.js";
 import { autoFireAt } from "../core/timeUtil.js";
 import { getActiveDelegation, paymentTypeFromCode } from "../core/delegations.js";
@@ -161,6 +161,16 @@ router.post("/:id/payment-confirmed", (req, res) => {
 router.put("/:id", (req, res) => {
   const { fireAt, cost, groupUid, fallbackBalance } = req.body || {};
   const result = editJob(req.params.id, req.user.id, { fireAt, cost, groupUid, fallbackBalance });
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true, job: presentJob(result.job, req.user.id) });
+});
+router.post("/:id/alternates", (req, res) => {
+  const result = addJobAlternate(req.params.id, req.user.id, req.body?.target || req.body || {});
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true, job: presentJob(result.job, req.user.id) });
+});
+router.delete("/:id/alternates/:index", (req, res) => {
+  const result = removeJobAlternate(req.params.id, req.user.id, req.params.index);
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true, job: presentJob(result.job, req.user.id) });
 });
