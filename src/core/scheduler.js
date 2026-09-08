@@ -147,7 +147,17 @@ async function runGrab(job, credentialArg, venueArg) {
       const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
       const releaseWindowMs = Number(retryPolicy.unavailableGraceMs || 0);
       const unavailableText = String(result?.message || "");
-      if (classification === "terminal" && releaseWindowMs > 0 && releaseElapsedMs <= releaseWindowMs && /\u4e0d\u53ef\u7ea6|\u65e0\u6548\u65f6\u6bb5/.test(unavailableText)) classification = "release-pending";
+      if (classification === "terminal" && releaseWindowMs > 0 && releaseElapsedMs <= releaseWindowMs && /不可约|无效时段/.test(unavailableText)) {
+        // 放场宽限内的"不可约"先回查场次细分: 真被占(已被预约/排课/锁场)保持终态立即放弃全部重试, 只有疑似未放出才降级继续等
+        const reason = await refineUnavailableReason(venue, job, credential, unavailableText);
+        if (reason && /已被预约|已被排课|已被锁场/.test(reason)) {
+          result = { ...result, message: `${unavailableText}（${reason}）` };
+          classification = "terminal";
+          console.log(`[grab] job=${job.id} slot occupied (${reason}), abandoning remaining attempts`);
+        } else {
+          classification = "release-pending";
+        }
+      }
       recordAttempt(job, attempt, dispatchedMs || Date.now(), classification, dispatchedMs ? Date.now() - dispatchedMs : 0, result?.message);
       profile = recordRiskEvent(job.venueId, classification === "success" ? "success" : classification === "rate-limited" ? "rate-limited" : "request", adapterProfile);
       if (classification === "success") break;
@@ -208,7 +218,7 @@ async function runGrab(job, credentialArg, venueArg) {
     if (result?.success !== true) {
       // 下单"不可约"失败后回查场次状态细分原因: 已被预约=真被人抢走(脚本慢), 已被锁场/排课=时段本身不可抢(等放场无意义)
       const reason = await refineUnavailableReason(venue, job, credential, result?.message);
-      if (reason) result = { ...result, message: `${result.message}（${reason}）` };
+      if (reason && !String(result.message || "").includes(reason)) result = { ...result, message: `${result.message}（${reason}）` };
     }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
