@@ -6,7 +6,7 @@ import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup } from "./jobGroups.js";
-import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment } from "./paymentLifecycle.js";
+import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -73,6 +73,37 @@ export async function refineUnavailableReason(venue, job, credential, message) {
   }
 }
 
+// 放场等待(watch 模式): 首发下单报"未放场"后, 改用随机短间隔轮询 listSlots 的 canAppoint(模拟人刷新)。
+// 查询接口无用户级风控(校准实测 250ms 间隔安全), 且不经过 enqueueBooking 下单限流队列 ——
+// 因此不占用/不阻塞任何下单(包括突然插进来的兜底任务); 检测到可约后回到 runGrab 循环,
+// 下单请求照常走限流队列按 店铺+凭证 排队, 与兜底/其他任务正确互斥。
+async function watchSlotRelease(venue, job, credential, cfg) {
+  const intervalMs = Math.max(150, Number(cfg.watchIntervalMs) || 500);
+  const jitterMs = Math.max(0, Number(cfg.watchJitterMs) || 0);
+  const timeoutMs = Math.max(10_000, Number(cfg.watchTimeoutMs) || 180_000);
+  const deadline = Date.now() + timeoutMs;
+  let consecutiveErrors = 0;
+  let polls = 0;
+  console.log(`[watch] job=${job.id} start interval=${intervalMs}±${jitterMs}ms timeout=${timeoutMs}ms`);
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs + Math.floor(Math.random() * (jitterMs + 1))));
+    if (Date.now() >= deadline) break;
+    try {
+      const slots = await venue.listSlots({ date: job.target?.date }, credential);
+      consecutiveErrors = 0;
+      polls++;
+      if (targetSlotsAvailable(job.target, slots)) {
+        console.log(`[watch] job=${job.id} released after ${polls} polls (${Math.round((Date.now() - (deadline - timeoutMs)) / 1000)}s), booking now`);
+        return true;
+      }
+    } catch (error) {
+      if (++consecutiveErrors >= 10) { console.warn(`[watch] job=${job.id} aborted after ${consecutiveErrors} consecutive errors: ${String(error?.message || error)}`); return false; }
+    }
+  }
+  console.warn(`[watch] job=${job.id} timeout after ${polls} polls, slot never released`);
+  return false;
+}
+
 async function runGrab(job, credentialArg, venueArg) {
   const venue = venueArg || getVenue(job.venueId);
   if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
@@ -121,6 +152,13 @@ async function runGrab(job, credentialArg, venueArg) {
       profile = recordRiskEvent(job.venueId, classification === "success" ? "success" : classification === "rate-limited" ? "rate-limited" : "request", adapterProfile);
       if (classification === "success") break;
       if (classification === "release-pending") releasePending = true;
+      // 未放场: 转 canAppoint 短轮询等待放场, 不再消耗下单 attempts, 不占下单限流队列(不阻塞兜底任务)
+      const watchCfg = retryPolicy.watchSlotRelease === true ? retryPolicy : null;
+      if (classification === "release-pending" && watchCfg && typeof venue.listSlots === "function") {
+        const released = await watchSlotRelease(venue, job, credential, watchCfg);
+        if (!released) break; // 超时/连续错误: 按最终失败走细分流程
+        continue; // 目标场次已可约: attempt++ 立即下单(走限流队列, 与其他任务正确排队)
+      }
       if (!["not-released", "release-pending", "rate-limited", "transient"].includes(classification) || attempt >= maxAttempts || (classification === "release-pending" && attempt >= releaseMaxAttempts)) break;
       if (classification === "release-pending" && releaseElapsedMs >= releaseWindowMs) break;
       const delay = linearRetryDelay(profile, classification);

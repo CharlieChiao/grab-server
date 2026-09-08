@@ -7,7 +7,7 @@ backend:
   projectUid: '1768357901249380361'
   payMethodBalance: 40
   payMethodWechat: 900
-# @todo 放场规则未校准: HAR 实测可见今天+明天(2 天), 暂按提前 2 个日历日推算
+# 放场规则: 2026-09-07 实测日历放场为提前 1 天(用户校准), 原按 2 天推算导致超宽限窗口
 advanceDays:
   tennis: 2
 release:
@@ -15,7 +15,7 @@ release:
   rules:
     tennis:
       mode: calendar-day-batch
-      calendarDaysBefore: 2
+      calendarDaysBefore: 1
       at: '00:00:00.000'
 bookingHours:
   start: '00:00'
@@ -27,6 +27,11 @@ releaseRetry:
   defaultMinIntervalMs: 3000
   jitterMs: 300
   maxAttempts: 8
+  # 首发下单报"未放场"后, 改用 canAppoint 短轮询等待放场(查询接口无风控, 不占下单限流队列)
+  watchSlotRelease: true
+  watchIntervalMs: 500
+  watchJitterMs: 300
+  watchTimeoutMs: 180000
 courts:
   - name: 1号风雨场
     type: tennis
