@@ -10,3 +10,4 @@ config/risk-profiles.json
 
 .runtime.env
 data/grab.sqlite*
+analysis/
