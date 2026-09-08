@@ -41,7 +41,10 @@ export async function loadVenues() {
     const entry = path.join(VENUES_DIR, d.name, "index.js");
     if (!fs.existsSync(entry)) continue;
     try {
-      const mod = await import(pathToFileURL(entry).href);
+      // cache-busting query: ESM import 对同一 URL 有模块缓存, 不加时间戳则 venue-config 保存后的
+      // 热重载会拿回启动时的旧模块(yml 配置是模块加载时读取的), 配置修改永远不生效。
+      // 代价: 旧模块实例的 undici 连接池不会显式关闭, 但配置保存频率极低, 依靠 keepAliveTimeout 自然回收
+      const mod = await import(pathToFileURL(entry).href + "?t=" + Date.now());
       const adapter = mod.default || mod;
       if (!adapter.meta || typeof adapter.grab !== "function" || typeof adapter.ready !== "function") {
         console.warn(`[venue] 跳过 ${d.name}: 未实现统一接口(meta/ready/grab)`);
