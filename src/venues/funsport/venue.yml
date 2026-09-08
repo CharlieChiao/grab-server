@@ -18,8 +18,8 @@ release:
       calendarDaysBefore: 1
       at: '00:00:00.000'
 bookingHours:
-  start: '00:00'
-  end: '23:00'
+  start: '06:00'
+  end: '00:00'
   slotMinutes: 60
   slotEndOffsetMinutes: -1
 releaseRetry:
@@ -53,7 +53,8 @@ capture:
   enabled: true
   hosts:
     - wxservice-stg48.pospal.cn
-  matchHeaders:            # 店铺隔离: 同一银豹网关多家店铺, 按请求头 STOREID 区分
+  matchHeaders:
+    # 店铺隔离: 同一银豹网关多家店铺, 按请求头 STOREID 区分
     STOREID: '6019568'
   paths:
     - '*'
