@@ -11,6 +11,10 @@
  *        classifyGrabResult(result) 风控分类 / preheat / buildGrabRequest+fireGrab 精度优化
  *        riskProfile{scopeKey,...} 限流配置
  *        payments{wechat,balance}   本场支付码语义声明(数字或字符串, 供 payCodes.paymentKind 解析)
+ *        courtUidsForType(type)→string[]|null 场地类型契约: 输入类型 key(tennis/pickle/..., 见 core/courtTypes.js)
+ *        返回该类型场地的 uid 列表; 不支持该类型返回 null(前端变灰, 捡漏任务不可选该球场)。
+ *        未显式实现的适配器由 registry 从 meta.courts[{type,uid}] 自动派生; courts 未声明则不支持任何类型。
+ *        新增场地类型须先在 core/courtTypes.js 的注册表登记。
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];
@@ -59,7 +63,19 @@ export async function loadVenues() {
         console.warn(`[venue] 跳过 ${d.name}: 未实现统一接口(meta/ready/grab)`);
         continue;
       }
-      registry.set(adapter.meta.id, { ...adapter, meta: normalizeMeta(adapter.meta) });
+      const registered = { ...adapter, meta: normalizeMeta(adapter.meta) };
+      // 场地类型契约: courtUidsForType(type) → uid[]|null。未显式实现的适配器从 courts 派生;
+      // courts 未声明任何场地 → 不支持任何类型(前端变灰, 无法创建/选中该球场的捡漏任务)
+      if (typeof registered.courtUidsForType !== "function") {
+        const byType = new Map();
+        for (const c of registered.meta.courts || []) {
+          if (!c.type || c.uid == null) continue;
+          if (!byType.has(c.type)) byType.set(c.type, []);
+          byType.get(c.type).push(String(c.uid));
+        }
+        registered.courtUidsForType = (type) => (type != null && byType.get(String(type))) || null;
+      }
+      registry.set(registered.meta.id, registered);
       console.log(`[venue] 已加载: ${adapter.meta.id} (${adapter.meta.name})`);
     } catch (e) {
       console.error(`[venue] 加载 ${d.name} 失败:`, e.message);

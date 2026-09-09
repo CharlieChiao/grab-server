@@ -12,7 +12,7 @@ import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
 import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { collectOwners } from "./jobs.js";
-import { courtTypeLabel } from "../core/courtTypes.js";
+import { courtTypeLabel, COURT_TYPES } from "../core/courtTypes.js";
 
 // 校验 courtTypes: 非空, 且每个选中场馆至少支持其中一种类型(否则该场馆永远订不到, 提前拦截)
 function validateCourtTypes(venueIds, courtTypes) {
@@ -63,19 +63,20 @@ function venueOptions(userId) {
   return listVenues().map((venue) => {
     const adapter = getVenue(venue.id);
     const cred = db.prepare("SELECT ready_ok FROM credentials WHERE user_id=? AND venue_id=?").get(userId, venue.id);
-    const courts = adapter?.meta?.courts || [];
+    // 场地类型经适配器契约 courtUidsForType 探测: 类型 → uid 列表非空即支持; 无 courts 声明的球场 courtTypes 为空(前端变灰)
+    const courtTypes = Object.keys(COURT_TYPES).filter((t) => (adapter?.courtUidsForType?.(t) || []).length > 0);
     return {
       id: venue.id, name: venue.name, logo: venue.logo || "",
       payments: adapter?.payments || null,
       credentialReady: cred ? cred.ready_ok === 1 : null,
-      courtTypes: [...new Set(courts.map((c) => c.type).filter(Boolean))].map((t) => ({ value: t, label: courtTypeLabel(t) })),
+      courtTypes: courtTypes.map((t) => ({ value: t, label: courtTypeLabel(t) })),
     };
   });
 }
 
 // 类型选项(所有球场类型并集, 带标签) — 前端唯一类型数据来源, 不再本地维护映射
 function allCourtTypeOptions() {
-  const types = [...new Set(listVenues().flatMap((v) => (getVenue(v.id)?.meta?.courts || []).map((c) => c.type).filter(Boolean)))];
+  const types = [...new Set(listVenues().flatMap((v) => Object.keys(COURT_TYPES).filter((t) => (getVenue(v.id)?.courtUidsForType?.(t) || []).length > 0)))];
   return types.map((t) => ({ value: t, label: courtTypeLabel(t) }));
 }
 

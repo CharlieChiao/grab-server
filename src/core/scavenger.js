@@ -145,6 +145,7 @@ export function courtTypeMap(venue) {
   }
   return (slot) => byUid.get(String(slot.uid ?? "")) ?? byName.get(String(slot.court || "").split("（")[0].trim()) ?? null;
 }
+// 已废弃上方通用映射: 过滤改用 allowedCourtUids(适配器契约 courtUidsForType 派生的 uid 白名单, 纯精确匹配)
 
 // 校验: 时段超过场馆单笔订单上限且不允许部分预订时, 任务永远无法成交, 创建/编辑时直接拦截
 function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
@@ -308,15 +309,14 @@ async function pollTask(task) {
       nonRefundableHours: venue.meta?.raw?.refundPolicy?.nonRefundableHours, now,
     };
     const avail = [];
-    const wantedTypes = new Set(task.courtTypes);
-    const typeOf = courtTypeMap(venue); // 场地类型硬过滤: 任务限定的类型集合(多选)
+    const allowedUids = allowedCourtUids(venue, task.courtTypes); // 契约: 类型 → uid 白名单
     for (const slot of slots) {
       const parsed = normalizeSlot(slot, ctx);
       if (!parsed || !parsed.available || parsed.cost <= 0) continue;
       if (!task.allowNonrefundable && parsed.nonRefundable) continue;
       if (!uncovered.some(([u1, u2]) => parsed.beginMin >= u1 && parsed.endMin <= u2)) continue;
-      // 严格遵守限定场地类型: 类型未知(未在 yml 登记)的场次一律不订, 防止误抢
-      if (!wantedTypes.has(typeOf(slot))) continue;
+      // 严格遵守限定场地类型: 仅白名单 uid 的场次可订, 未登记的 uid 一律不订(防误抢)
+      if (!allowedUids.has(String(slot.uid ?? ""))) continue;
       avail.push(parsed);
     }
     // 逐个未覆盖区间尝试下单(先铺满, 铺不满且允许部分则订最长连续段)
