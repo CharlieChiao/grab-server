@@ -16,14 +16,23 @@
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];
 
 // meta.raw 公开字段自动展开到顶层(适配器显式声明优先), 新球场无需手工抄写 meta
+// courts[].type 经注册表归一(中文/别名 → 标准 key), 保证跨场馆类型可比
 function normalizeMeta(meta) {
   const raw = meta.raw || {};
   const merged = { ...meta };
   for (const field of META_PUBLIC_FIELDS) {
     if (merged[field] === undefined && raw[field] !== undefined) merged[field] = raw[field];
   }
+  if (Array.isArray(merged.courts)) {
+    merged.courts = merged.courts.map((c) => {
+      const type = normalizeCourtType(c.type);
+      if (type && !COURT_TYPES[type]) console.warn(`[venue] ${meta.id} 场地「${c.name}」类型「${type}」未在注册表登记, 作为独立类型处理`);
+      return { ...c, type: type || undefined };
+    });
+  }
   return merged;
 }
+import { normalizeCourtType, COURT_TYPES } from "./courtTypes.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

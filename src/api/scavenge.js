@@ -12,16 +12,15 @@ import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
 import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { collectOwners } from "./jobs.js";
+import { courtTypeLabel } from "../core/courtTypes.js";
 
-// 场地类型中文标签(与 yml courts[].type 对应, 未登记的类型前端回退显示原值)
-const COURT_TYPE_LABELS = { tennis: "网球", pickle: "匹克球", badminton: "羽毛球", basketball: "篮球", football: "足球", table_tennis: "乒乓球", snooker: "台球", swimming: "游泳" };
 // 校验 courtType: 必须被所有选中场馆支持(任意场馆缺少该类型则拒绝)
 function validateCourtType(venueIds, courtType) {
   if (!courtType) return null;
   for (const venueId of [...new Set(venueIds || [])]) {
     const venue = getVenue(venueId);
-    const types = [...new Set((venue?.meta?.raw?.courts || []).map((c) => c.type).filter(Boolean))];
-    if (!types.includes(courtType)) return `${venue?.name || venueId} 没有${COURT_TYPE_LABELS[courtType] || courtType}场地, 请重新选择球场或类型`;
+    const types = [...new Set((venue?.meta?.courts || []).map((c) => c.type).filter(Boolean))];
+    if (!types.includes(courtType)) return `${venue?.name || venueId} 没有${courtTypeLabel(courtType) || courtType}场地, 请重新选择球场或类型`;
   }
   return null;
 }
@@ -48,7 +47,7 @@ function presentTask(task) {
   const spent = bookings.filter((b) => !b.released).reduce((sum, b) => sum + (b.cost || 0), 0);
   return {
     id: task.id, userId: task.userId, venueIds: task.venueIds, date: task.date, startTime: task.startTime, endTime: task.endTime,
-    courtType: task.courtType || null, courtTypeLabel: COURT_TYPE_LABELS[task.courtType] || task.courtType || "不限",
+    courtType: task.courtType || null, courtTypeLabel: courtTypeLabel(task.courtType) || "网球",
     allowCombine: task.allowCombine, allowPartial: task.allowPartial, allowNonrefundable: task.allowNonrefundable,
     maxTotalCost: task.maxTotalCost, payKind: task.payKind, status: task.status, stats: task.stats,
     createdAt: task.createdAt, updatedAt: task.updatedAt, bookings,
@@ -61,19 +60,25 @@ function venueOptions(userId) {
   return listVenues().map((venue) => {
     const adapter = getVenue(venue.id);
     const cred = db.prepare("SELECT ready_ok FROM credentials WHERE user_id=? AND venue_id=?").get(userId, venue.id);
-    const courts = adapter?.meta?.raw?.courts || [];
+    const courts = adapter?.meta?.courts || [];
     return {
       id: venue.id, name: venue.name, logo: venue.logo || "",
       payments: adapter?.payments || null,
       credentialReady: cred ? cred.ready_ok === 1 : null,
-      courtTypes: [...new Set(courts.map((c) => c.type).filter(Boolean))],
+      courtTypes: [...new Set(courts.map((c) => c.type).filter(Boolean))].map((t) => ({ value: t, label: courtTypeLabel(t) })),
     };
   });
 }
 
+// 类型选项(所有球场类型并集, 带标签) — 前端唯一类型数据来源, 不再本地维护映射
+function allCourtTypeOptions() {
+  const types = [...new Set(listVenues().flatMap((v) => (getVenue(v.id)?.meta?.courts || []).map((c) => c.type).filter(Boolean)))];
+  return types.map((t) => ({ value: t, label: courtTypeLabel(t) }));
+}
+
 router.get("/", (req, res) => {
   const tasks = listScavengeTasks(req.user.id);
-  res.json({ ok: true, tasks: tasks.map(presentTask), venueOptions: venueOptions(req.user.id), owners: collectOwners(tasks) });
+  res.json({ ok: true, tasks: tasks.map(presentTask), venueOptions: venueOptions(req.user.id), courtTypeOptions: allCourtTypeOptions(), owners: collectOwners(tasks) });
 });
 
 router.post("/", (req, res) => {

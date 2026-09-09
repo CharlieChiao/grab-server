@@ -128,7 +128,7 @@ function rowToTask(row) {
 }
 // 场地类型映射(来自 yml courts[].type): uid 优先匹配, 场次名前缀兜底(银豹场次名带门店后缀)
 export function courtTypeMap(venue) {
-  const courts = venue?.meta?.raw?.courts || [];
+  const courts = venue?.meta?.courts || []; // registry 归一后的场地表(类型已收拢为标准 key)
   const byUid = new Map(), byName = new Map();
   for (const c of courts) {
     if (c.uid != null) byUid.set(String(c.uid), String(c.type || ""));
