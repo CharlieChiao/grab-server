@@ -10,7 +10,7 @@
 import express from "express";
 import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
-import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
+import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, deleteScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { collectOwners } from "./jobs.js";
 import { courtTypeLabel, COURT_TYPES } from "../core/courtTypes.js";
 
@@ -123,10 +123,18 @@ router.post("/", (req, res) => {
   res.json({ ok: true, task: presentTask(created) });
 });
 
-router.delete("/:id", (req, res) => {
+// 停止进行中的捡漏任务(保留记录)
+router.post("/:id/stop", (req, res) => {
   const task = stopScavengeTask(req.params.id, req.user.id);
   if (!task) return res.status(404).json({ error: "not found" });
   res.json({ ok: true, task: presentTask(task) });
+});
+
+// 删除捡漏任务(仅非进行中)
+router.delete("/:id", (req, res) => {
+  const result = deleteScavengeTask(req.params.id, req.user.id);
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
 });
 
 // 编辑进行中的捡漏任务(时段/规则/预算/支付优先级/场地类型)

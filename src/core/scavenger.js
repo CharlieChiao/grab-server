@@ -199,6 +199,16 @@ export function stopScavengeTask(id, userId) {
   return getScavengeTask(id, userId);
 }
 
+// 删除捡漏任务记录(仅非进行中: 进行中须先停止, 防误删正在下单的任务)
+export function deleteScavengeTask(id, userId) {
+  const task = getScavengeTask(id, userId);
+  if (!task) return { error: "not found" };
+  if (task.status === "active") return { error: "任务进行中, 请先停止再删除" };
+  db.prepare("DELETE FROM scavenge_tasks WHERE id=? AND user_id=?").run(id, userId);
+  db.prepare("DELETE FROM job_attempts WHERE job_id=?").run("scavenge:" + id);
+  return { ok: true };
+}
+
 // 编辑进行中的捡漏任务(时段/规则/预算/支付优先级; 已订 bookings 的分钟记账在新时段下自动重算)
 export function updateScavengeTask(id, userId, input = {}) {
   const row = db.prepare("SELECT * FROM scavenge_tasks WHERE id=? AND user_id=?").get(id, userId);
