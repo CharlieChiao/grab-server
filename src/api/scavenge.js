@@ -12,6 +12,19 @@ import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
 import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { collectOwners } from "./jobs.js";
+
+// 场地类型中文标签(与 yml courts[].type 对应, 未登记的类型前端回退显示原值)
+const COURT_TYPE_LABELS = { tennis: "网球", pickle: "匹克球", badminton: "羽毛球", basketball: "篮球", football: "足球", table_tennis: "乒乓球", snooker: "台球", swimming: "游泳" };
+// 校验 courtType: 必须被所有选中场馆支持(任意场馆缺少该类型则拒绝)
+function validateCourtType(venueIds, courtType) {
+  if (!courtType) return null;
+  for (const venueId of [...new Set(venueIds || [])]) {
+    const venue = getVenue(venueId);
+    const types = [...new Set((venue?.meta?.raw?.courts || []).map((c) => c.type).filter(Boolean))];
+    if (!types.includes(courtType)) return `${venue?.name || venueId} 没有${COURT_TYPE_LABELS[courtType] || courtType}场地, 请重新选择球场或类型`;
+  }
+  return null;
+}
 import { paymentParams } from "./jobs.js";
 
 const router = express.Router();
@@ -35,6 +48,7 @@ function presentTask(task) {
   const spent = bookings.filter((b) => !b.released).reduce((sum, b) => sum + (b.cost || 0), 0);
   return {
     id: task.id, userId: task.userId, venueIds: task.venueIds, date: task.date, startTime: task.startTime, endTime: task.endTime,
+    courtType: task.courtType || null, courtTypeLabel: COURT_TYPE_LABELS[task.courtType] || task.courtType || "不限",
     allowCombine: task.allowCombine, allowPartial: task.allowPartial, allowNonrefundable: task.allowNonrefundable,
     maxTotalCost: task.maxTotalCost, payKind: task.payKind, status: task.status, stats: task.stats,
     createdAt: task.createdAt, updatedAt: task.updatedAt, bookings,
@@ -47,10 +61,12 @@ function venueOptions(userId) {
   return listVenues().map((venue) => {
     const adapter = getVenue(venue.id);
     const cred = db.prepare("SELECT ready_ok FROM credentials WHERE user_id=? AND venue_id=?").get(userId, venue.id);
+    const courts = adapter?.meta?.raw?.courts || [];
     return {
       id: venue.id, name: venue.name, logo: venue.logo || "",
       payments: adapter?.payments || null,
       credentialReady: cred ? cred.ready_ok === 1 : null,
+      courtTypes: [...new Set(courts.map((c) => c.type).filter(Boolean))],
     };
   });
 }
@@ -61,7 +77,9 @@ router.get("/", (req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { venueIds, date, startTime, endTime, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind } = req.body || {};
+  const { venueIds, date, startTime, endTime, courtType, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind } = req.body || {};
+  const courtTypeError = validateCourtType(venueIds, courtType || null);
+  if (courtTypeError) return res.status(400).json({ error: courtTypeError });
   if (!Array.isArray(venueIds) || !venueIds.length) return res.status(400).json({ error: "请至少选择一个球场" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return res.status(400).json({ error: "日期格式无效" });
   const startMin = hhmmToMinutes(startTime), endMin = hhmmToMinutes(endTime);
@@ -88,7 +106,7 @@ router.post("/", (req, res) => {
   }
   if (unsupported.length) return res.status(400).json({ error: "以下球场不可用: " + unsupported.join("、") });
   const created = createScavengeTask(req.user.id, {
-    venueIds: [...new Set(venueIds)], date, startTime, endTime,
+    venueIds: [...new Set(venueIds)], date, startTime, endTime, courtType: courtType || null,
     allowCombine: allowCombine !== false, allowPartial: allowPartial !== false, allowNonrefundable: allowNonrefundable !== false,
     maxTotalCost: cost, payKind: normalizedPay,
   });
@@ -102,9 +120,17 @@ router.delete("/:id", (req, res) => {
   res.json({ ok: true, task: presentTask(task) });
 });
 
-// 编辑进行中的捡漏任务(时段/规则/预算/支付优先级)
+// 编辑进行中的捡漏任务(时段/规则/预算/支付优先级/场地类型)
 router.put("/:id", (req, res) => {
-  const result = updateScavengeTask(req.params.id, req.user.id, req.body || {});
+  const body = req.body || {};
+  const row = db.prepare("SELECT venue_ids_json FROM scavenge_tasks WHERE id=? AND user_id=?").get(req.params.id, req.user.id);
+  if (row && body.courtType !== undefined) {
+    let vids = [];
+    try { vids = JSON.parse(row.venue_ids_json || "[]"); } catch {}
+    const courtTypeError = validateCourtType(vids, body.courtType || null);
+    if (courtTypeError) return res.status(400).json({ error: courtTypeError });
+  }
+  const result = updateScavengeTask(req.params.id, req.user.id, body);
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true, task: presentTask(result.task) });
 });

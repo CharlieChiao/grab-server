@@ -117,6 +117,7 @@ function rowToTask(row) {
   return {
     id: row.id, userId: row.user_id, venueIds, date: row.date, startTime: row.start_time, endTime: row.end_time,
     startMin, endMin, crossOvernight: endMin > 1440,
+    courtType: row.court_type || null,
     allowCombine: !!row.allow_combine, allowPartial: !!row.allow_partial, allowNonrefundable: !!row.allow_nonrefundable,
     maxTotalCost: Number(row.max_total_cost),
     // 支付优先级: balance-first(余额优先, 余额不足自动改微信锁场) / wechat-first; 兼容旧单值
@@ -125,6 +126,17 @@ function rowToTask(row) {
     bookings, stats, createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
+// 场地类型映射(来自 yml courts[].type): uid 优先匹配, 场次名前缀兜底(银豹场次名带门店后缀)
+export function courtTypeMap(venue) {
+  const courts = venue?.meta?.raw?.courts || [];
+  const byUid = new Map(), byName = new Map();
+  for (const c of courts) {
+    if (c.uid != null) byUid.set(String(c.uid), String(c.type || ""));
+    if (c.name) byName.set(String(c.name), String(c.type || ""));
+  }
+  return (slot) => byUid.get(String(slot.uid ?? "")) ?? byName.get(String(slot.court || "").split("（")[0].trim()) ?? null;
+}
+
 // 校验: 时段超过场馆单笔订单上限且不允许部分预订时, 任务永远无法成交, 创建/编辑时直接拦截
 function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
   if (allowPartial) return null;
@@ -144,8 +156,8 @@ export function createScavengeTask(userId, input) {
   if (spanError) return { error: spanError };
   const id = crypto.randomUUID();
   const now = nowIso();
-  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime,
+  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_type,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime, input.courtType || null,
       input.allowCombine === false ? 0 : 1, input.allowPartial === false ? 0 : 1, input.allowNonrefundable === false ? 0 : 1,
       input.maxTotalCost, input.payKind, "active", "[]", "{}", now, now);
   return getScavengeTask(id, userId);
@@ -195,8 +207,9 @@ export function updateScavengeTask(id, userId, input = {}) {
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
   const spanError = validateOrderSpan(JSON.parse(row.venue_ids_json || "[]"), startMin, endMin, allowPartial);
   if (spanError) return { error: spanError };
-  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
-    .run(date, startTime, endTime, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
+  const courtType = input.courtType === undefined ? (row.court_type || null) : (input.courtType || null);
+  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_type=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
+    .run(date, startTime, endTime, courtType, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
   return { task: getScavengeTask(id, userId) };
 }
 
@@ -280,11 +293,14 @@ async function pollTask(task) {
       nonRefundableHours: venue.meta?.raw?.refundPolicy?.nonRefundableHours, now,
     };
     const avail = [];
+    const typeOf = task.courtType ? courtTypeMap(venue) : null; // 场地类型硬过滤: 任务的限定类型
     for (const slot of slots) {
       const parsed = normalizeSlot(slot, ctx);
       if (!parsed || !parsed.available || parsed.cost <= 0) continue;
       if (!task.allowNonrefundable && parsed.nonRefundable) continue;
       if (!uncovered.some(([u1, u2]) => parsed.beginMin >= u1 && parsed.endMin <= u2)) continue;
+      // 严格遵守限定场地类型: 类型未知(未在 yml 登记)的场次一律不订, 防止误抢
+      if (task.courtType && typeOf(slot) !== task.courtType) continue;
       avail.push(parsed);
     }
     // 逐个未覆盖区间尝试下单(先铺满, 铺不满且允许部分则订最长连续段)

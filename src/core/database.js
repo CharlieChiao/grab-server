@@ -66,6 +66,8 @@ function ensureTableColumn(table, name, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   }
 }
+ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(tennis/pickle/...), null=不限
+
 for (const table of ["jobs", "job_history"]) {
   ensureTableColumn(table, "created_by_user_id", "TEXT");
   ensureTableColumn(table, "delegation_id", "TEXT");
