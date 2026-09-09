@@ -79,12 +79,15 @@ export function normalizeSlot(slot, ctx) {
 
 // ---------- 链搜索: 在 [from,to] 内用可约 slot 拼时间连续的链 ----------
 // full: 精确铺满 [from,to]; partial: 任意连续子段。同价优先单场地(体验好), 预算内取最优。
-export function findCandidates(slots, from, to, allowCombine, budget) {
+// maxMinutes: 单笔订单时长上限(场馆规则, 如 In Tennis 单订单≤6小时); 超限链不入候选, 长时段自动拆多笔
+export function findCandidates(slots, from, to, allowCombine, budget, maxMinutes) {
   const within = slots.filter((s) => s.beginMin >= from && s.endMin <= to);
   const chains = [];
   const walk = (chain) => {
     const cost = chain.reduce((sum, x) => sum + x.cost, 0);
     if (cost > budget) return;
+    const span = chain[chain.length - 1].endMin - chain[0].beginMin;
+    if (maxMinutes && span > maxMinutes) return;
     chains.push({ chain: [...chain], full: chain[0].beginMin === from && chain[chain.length - 1].endMin === to });
     const end = chain[chain.length - 1].endMin;
     for (const next of within.filter((s) => s.beginMin === end && (allowCombine || s.uid === chain[0].uid))) walk([...chain, next]);
@@ -122,7 +125,23 @@ function rowToTask(row) {
     bookings, stats, createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
+// 校验: 时段超过场馆单笔订单上限且不允许部分预订时, 任务永远无法成交, 创建/编辑时直接拦截
+function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
+  if (allowPartial) return null;
+  for (const vid of venueIds || []) {
+    const venue = getVenue(vid);
+    const max = venue?.meta?.raw?.limits?.maxOrderMinutes;
+    if (max && endMin - startMin > max) return `时段超过该场馆单笔订单上限(${Math.floor(max / 60)}小时), 需拆多笔下单, 请开启「允许只订到部分时间」或缩短时段`;
+  }
+  return null;
+}
+
 export function createScavengeTask(userId, input) {
+  let sMin = hhmmToMinutes(input.startTime), eMin = hhmmToMinutes(input.endTime);
+  if (sMin == null || eMin == null) return { error: "时间格式无效(HH:MM)" };
+  if (eMin <= sMin) eMin += 1440; // 跨天
+  const spanError = validateOrderSpan(input.venueIds, sMin, eMin, input.allowPartial !== false);
+  if (spanError) return { error: spanError };
   const id = crypto.randomUUID();
   const now = nowIso();
   db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -174,6 +193,8 @@ export function updateScavengeTask(id, userId, input = {}) {
   const allowCombine = input.allowCombine === undefined ? !!row.allow_combine : !!input.allowCombine;
   const allowPartial = input.allowPartial === undefined ? !!row.allow_partial : !!input.allowPartial;
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
+  const spanError = validateOrderSpan(JSON.parse(row.venue_ids_json || "[]"), startMin, endMin, allowPartial);
+  if (spanError) return { error: spanError };
   db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
     .run(date, startTime, endTime, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
   return { task: getScavengeTask(id, userId) };
@@ -268,7 +289,7 @@ async function pollTask(task) {
     for (const [u1, u2] of uncovered) {
       const spent = bookings.filter((b) => !b.released).reduce((sum, b) => sum + (b.cost || 0), 0);
       const budget = task.maxTotalCost - spent;
-      const candidates = findCandidates(avail, u1, u2, task.allowCombine, budget);
+      const candidates = findCandidates(avail, u1, u2, task.allowCombine, budget, venue.meta?.raw?.limits?.maxOrderMinutes);
       const pick = candidates.full || (task.allowPartial ? candidates.partial : null);
       if (!pick) continue;
       // 关键流程日志: 发现可约场次(每次轮询静默, 仅在真正有机会时输出)

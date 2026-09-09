@@ -87,12 +87,13 @@ router.post("/", (req, res) => {
     else if (venue.payments?.[primaryKind] == null && venue.payments?.[fallbackKind] == null) unsupported.push(`${venue.name}(不支持任何支付方式)`);
   }
   if (unsupported.length) return res.status(400).json({ error: "以下球场不可用: " + unsupported.join("、") });
-  const task = createScavengeTask(req.user.id, {
+  const created = createScavengeTask(req.user.id, {
     venueIds: [...new Set(venueIds)], date, startTime, endTime,
     allowCombine: allowCombine !== false, allowPartial: allowPartial !== false, allowNonrefundable: allowNonrefundable !== false,
     maxTotalCost: cost, payKind: normalizedPay,
   });
-  res.json({ ok: true, task: presentTask(task) });
+  if (created?.error) return res.status(400).json({ error: created.error });
+  res.json({ ok: true, task: presentTask(created) });
 });
 
 router.delete("/:id", (req, res) => {
