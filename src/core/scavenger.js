@@ -136,16 +136,14 @@ function parseCourtTypes(json) {
   return ["tennis"];
 }
 
-export function courtTypeMap(venue) {
-  const courts = venue?.meta?.courts || []; // registry 归一后的场地表(类型已收拢为标准 key)
-  const byUid = new Map(), byName = new Map();
-  for (const c of courts) {
-    if (c.uid != null) byUid.set(String(c.uid), String(c.type || ""));
-    if (c.name) byName.set(String(c.name), String(c.type || ""));
+// 任务限定类型 → 该场馆允许下单的场地 uid 集合(经适配器契约 courtUidsForType 派生, 纯 uid 精确匹配)
+function allowedCourtUids(venue, courtTypes) {
+  const uids = new Set();
+  for (const type of courtTypes || []) {
+    for (const uid of venue?.courtUidsForType?.(type) || []) uids.add(String(uid));
   }
-  return (slot) => byUid.get(String(slot.uid ?? "")) ?? byName.get(String(slot.court || "").split("（")[0].trim()) ?? null;
+  return uids;
 }
-// 已废弃上方通用映射: 过滤改用 allowedCourtUids(适配器契约 courtUidsForType 派生的 uid 白名单, 纯精确匹配)
 
 // 校验: 时段超过场馆单笔订单上限且不允许部分预订时, 任务永远无法成交, 创建/编辑时直接拦截
 function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
