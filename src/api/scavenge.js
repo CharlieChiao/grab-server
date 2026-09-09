@@ -11,6 +11,7 @@ import express from "express";
 import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
 import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
+import { collectOwners } from "./jobs.js";
 import { paymentParams } from "./jobs.js";
 
 const router = express.Router();
@@ -33,7 +34,7 @@ function presentTask(task) {
   const totalMinutes = task.endMin - task.startMin;
   const spent = bookings.filter((b) => !b.released).reduce((sum, b) => sum + (b.cost || 0), 0);
   return {
-    id: task.id, venueIds: task.venueIds, date: task.date, startTime: task.startTime, endTime: task.endTime,
+    id: task.id, userId: task.userId, venueIds: task.venueIds, date: task.date, startTime: task.startTime, endTime: task.endTime,
     allowCombine: task.allowCombine, allowPartial: task.allowPartial, allowNonrefundable: task.allowNonrefundable,
     maxTotalCost: task.maxTotalCost, payKind: task.payKind, status: task.status, stats: task.stats,
     createdAt: task.createdAt, updatedAt: task.updatedAt, bookings,
@@ -55,7 +56,8 @@ function venueOptions(userId) {
 }
 
 router.get("/", (req, res) => {
-  res.json({ ok: true, tasks: listScavengeTasks(req.user.id).map(presentTask), venueOptions: venueOptions(req.user.id) });
+  const tasks = listScavengeTasks(req.user.id);
+  res.json({ ok: true, tasks: tasks.map(presentTask), venueOptions: venueOptions(req.user.id), owners: collectOwners(tasks) });
 });
 
 router.post("/", (req, res) => {

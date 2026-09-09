@@ -119,7 +119,7 @@ router.post("/", (req, res) => {
 
 // 定场人(owner)资料映射: 头像走稳定 URL(image 标签可缓存, 轮询重渲染不闪烁), v 参数在换头像后破缓存
 // avatar(data URI)为旧版前端兼容字段, 小程序发版后可移除
-function collectOwners(jobs) {
+export function collectOwners(jobs) {
   const owners = {};
   for (const job of jobs) {
     const userId = job.userId;
