@@ -10,7 +10,7 @@
 import express from "express";
 import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
-import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, deleteScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
+import { createScavengeTask, getScavengeTask, listScavengeTasks, listArchivedScavengeTasks, stopScavengeTask, deleteScavengeTask, restartScavengeTask, archiveScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { collectOwners } from "./jobs.js";
 import { courtTypeLabel, COURT_TYPES } from "../core/courtTypes.js";
 
@@ -82,7 +82,9 @@ function allCourtTypeOptions() {
 
 router.get("/", (req, res) => {
   const tasks = listScavengeTasks(req.user.id);
-  res.json({ ok: true, tasks: tasks.map(presentTask), venueOptions: venueOptions(req.user.id), courtTypeOptions: allCourtTypeOptions(), owners: collectOwners(tasks) });
+  const archived = listArchivedScavengeTasks(req.user.id);
+  const all = [...tasks, ...archived];
+  res.json({ ok: true, tasks: tasks.map(presentTask), archivedTasks: archived.map(presentTask), venueOptions: venueOptions(req.user.id), courtTypeOptions: allCourtTypeOptions(), owners: collectOwners(all) });
 });
 
 router.post("/", (req, res) => {
@@ -133,6 +135,20 @@ router.post("/:id/stop", (req, res) => {
 // 删除捡漏任务(仅非进行中)
 router.delete("/:id", (req, res) => {
   const result = deleteScavengeTask(req.params.id, req.user.id);
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+// 重新开始已停止的捡漏任务
+router.post("/:id/restart", (req, res) => {
+  const result = restartScavengeTask(req.params.id, req.user.id);
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true, task: presentTask(result.task) });
+});
+
+// 归档捡漏任务(移入历史区)
+router.post("/:id/archive", (req, res) => {
+  const result = archiveScavengeTask(req.params.id, req.user.id);
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true });
 });

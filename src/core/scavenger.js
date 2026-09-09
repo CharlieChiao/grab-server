@@ -176,7 +176,10 @@ export function getScavengeTask(id, userId) {
   return rowToTask(db.prepare("SELECT * FROM scavenge_tasks WHERE id=? AND user_id=?").get(id, userId));
 }
 export function listScavengeTasks(userId) {
-  return db.prepare("SELECT * FROM scavenge_tasks WHERE user_id=? ORDER BY created_at DESC").all(userId).map(rowToTask).filter(Boolean);
+  return db.prepare("SELECT * FROM scavenge_tasks WHERE user_id=? AND archived=0 ORDER BY created_at DESC").all(userId).map(rowToTask).filter(Boolean);
+}
+export function listArchivedScavengeTasks(userId) {
+  return db.prepare("SELECT * FROM scavenge_tasks WHERE user_id=? AND archived=1 ORDER BY created_at DESC").all(userId).map(rowToTask).filter(Boolean);
 }
 function listActiveTasks() {
   return db.prepare("SELECT * FROM scavenge_tasks WHERE status='active'").all().map(rowToTask).filter(Boolean);
@@ -204,6 +207,29 @@ export function deleteScavengeTask(id, userId) {
   if (task.status === "active") return { error: "任务进行中, 请先停止再删除" };
   db.prepare("DELETE FROM scavenge_tasks WHERE id=? AND user_id=?").run(id, userId);
   db.prepare("DELETE FROM job_attempts WHERE job_id=?").run("scavenge:" + id);
+  return { ok: true };
+}
+
+// 重新开始已停止的捡漏任务(保留已订订单继续补剩余时段; 时段已过则拒绝)
+export function restartScavengeTask(id, userId) {
+  const task = getScavengeTask(id, userId);
+  if (!task) return { error: "not found" };
+  if (task.status === "active") return { task };
+  if (task.status !== "stopped") return { error: "仅已停止的任务可重新开始" };
+  if (beijingMs(task.date, task.endMin) + 3600000 < Date.now()) return { error: "时段已过, 无法重新开始" };
+  const stats = { ...(task.stats || {}) };
+  delete stats.endedReason;
+  updateTaskRow(id, { status: "active", stats });
+  nextPollAt.delete(id);
+  return { task: getScavengeTask(id, userId) };
+}
+
+// 归档捡漏任务(从待执行区移入历史区, 保留记录与订单)
+export function archiveScavengeTask(id, userId) {
+  const task = getScavengeTask(id, userId);
+  if (!task) return { error: "not found" };
+  if (task.status === "active") return { error: "任务进行中, 请先停止再归档" };
+  db.prepare("UPDATE scavenge_tasks SET archived=1, updated_at=? WHERE id=? AND user_id=?").run(nowIso(), id, userId);
   return { ok: true };
 }
 

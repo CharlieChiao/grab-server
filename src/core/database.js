@@ -68,6 +68,7 @@ function ensureTableColumn(table, name, definition) {
 }
 ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(旧单值列, 已被 court_types_json 取代)
 ensureTableColumn("scavenge_tasks", "court_types_json", "TEXT"); // 捡漏任务限定的场地类型数组(tennis/pickle/...), 至少一项
+ensureTableColumn("scavenge_tasks", "archived", "INTEGER NOT NULL DEFAULT 0"); // 归档(进入历史区), 停止/订满后可归档
 db.exec("UPDATE scavenge_tasks SET court_types_json=? WHERE court_types_json IS NULL OR court_types_json=''", JSON.stringify(["tennis"])); // 存量统一迁移为网球
 
 for (const table of ["jobs", "job_history"]) {
@@ -86,7 +87,7 @@ if (fs.existsSync(legacyJobsFile) && db.prepare("SELECT COUNT(*) AS n FROM jobs"
     if (legacyJobs.length) console.log("[db] migrated " + legacyJobs.length + " legacy jobs");
   } catch (e) { console.warn("[db] legacy jobs migration skipped:", e.message); }
 }
-const archiveCompleted = db.prepare("INSERT OR IGNORE INTO job_history(id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,archived_at) SELECT id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,? FROM jobs WHERE status IN (\'done\',\'failed\')");
+const archiveCompleted = db.prepare("INSERT OR IGNORE INTO job_history(id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,archived_at) SELECT id,user_id,venue_id,target_json,fire_at,status,result_json,created_at,updated_at,? FROM jobs WHERE status IN (\'done\',\'failed\',\'stopped\')");
 archiveCompleted.run(nowIso());
 db.prepare("DELETE FROM jobs WHERE status IN (\'done\',\'failed\')").run();
 

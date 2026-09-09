@@ -222,6 +222,15 @@ async function runGrab(job, credentialArg, venueArg) {
     }
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
+    // 任务组语义: 任一成员成功后, 其余待执行成员直接停止(新状态 stopped), 不再开抢
+    if (result?.success && completed?.groupUid) {
+      const siblings = db.prepare("SELECT id FROM jobs WHERE group_uid=? AND status='pending' AND id!=?").all(completed.groupUid, job.id);
+      for (const s of siblings) {
+        const stopped = updateJob(s.id, { status: "stopped", result: { success: false, message: "组内已有任务成功, 自动停止" } });
+        if (stopped) { console.log(`[group] ${completed.groupUid} 成员 ${job.id} 成功, 停止兄弟任务 ${s.id}`); archiveJob(s.id); notifyJobResult(stopped).catch(() => {}); }
+      }
+      finalizeAndRepeatGroup(completed.groupUid);
+    }
   } catch (error) {
     const message = `调度异常: ${String(error?.message || error)}`;
     console.error(`[grab] job=${job.id} ${message}`);
