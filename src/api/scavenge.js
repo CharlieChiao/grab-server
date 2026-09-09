@@ -78,7 +78,8 @@ router.get("/", (req, res) => {
 
 router.post("/", (req, res) => {
   const { venueIds, date, startTime, endTime, courtType, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind } = req.body || {};
-  const courtTypeError = validateCourtType(venueIds, courtType || null);
+  if (!courtType) return res.status(400).json({ error: "请选择场地类型(不限类型已废弃)" });
+  const courtTypeError = validateCourtType(venueIds, courtType);
   if (courtTypeError) return res.status(400).json({ error: courtTypeError });
   if (!Array.isArray(venueIds) || !venueIds.length) return res.status(400).json({ error: "请至少选择一个球场" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return res.status(400).json({ error: "日期格式无效" });

@@ -66,7 +66,8 @@ function ensureTableColumn(table, name, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   }
 }
-ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(tennis/pickle/...), null=不限
+ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(tennis/pickle/...), 必填
+db.exec("UPDATE scavenge_tasks SET court_type='tennis' WHERE court_type IS NULL"); // 存量任务统一迁移为网球(不限类型太危险, 已废弃)
 
 for (const table of ["jobs", "job_history"]) {
   ensureTableColumn(table, "created_by_user_id", "TEXT");

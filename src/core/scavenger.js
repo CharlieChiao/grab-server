@@ -149,6 +149,7 @@ function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
 }
 
 export function createScavengeTask(userId, input) {
+  if (!input.courtType) return { error: "必须选择场地类型" }; // 不限类型已废弃(误抢风险)
   let sMin = hhmmToMinutes(input.startTime), eMin = hhmmToMinutes(input.endTime);
   if (sMin == null || eMin == null) return { error: "时间格式无效(HH:MM)" };
   if (eMin <= sMin) eMin += 1440; // 跨天
@@ -207,7 +208,8 @@ export function updateScavengeTask(id, userId, input = {}) {
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
   const spanError = validateOrderSpan(JSON.parse(row.venue_ids_json || "[]"), startMin, endMin, allowPartial);
   if (spanError) return { error: spanError };
-  const courtType = input.courtType === undefined ? (row.court_type || null) : (input.courtType || null);
+  const courtType = input.courtType === undefined ? (row.court_type || "tennis") : String(input.courtType || "");
+  if (!courtType) return { error: "必须选择场地类型" };
   db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_type=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
     .run(date, startTime, endTime, courtType, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
   return { task: getScavengeTask(id, userId) };
