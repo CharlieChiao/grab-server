@@ -141,7 +141,7 @@ async function runGrab(job, credentialArg, venueArg) {
           const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
           console.log(`[dispatch] job=${job.id} venue=${job.venueId} attempt=${attempt} planned=${job.fireAt || "immediate"} actual=${new Date(dispatchedMs).toISOString()} driftMs=${plannedMs == null ? "n/a" : dispatchedMs - plannedMs}`);
           return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
-        }, useReleaseLimiter ? { minIntervalMs: releaseInterval, jitterMs: Number(fastRetry.jitterMs || 0) } : undefined);
+        }, { priority: "high", ...(useReleaseLimiter ? { minIntervalMs: releaseInterval, jitterMs: Number(fastRetry.jitterMs || 0) } : {}) });
       } catch (e) { result = { success: false, message: String(e.message || e) }; }
       let classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
       const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
@@ -197,7 +197,7 @@ async function runGrab(job, credentialArg, venueArg) {
           altResult = await enqueueBooking(job.venueId, limiterProfile, async () => {
             console.log(`[dispatch] job=${job.id} alternate=${i + 1}/${alternates.length} at=${new Date().toISOString()}`);
             return venue.grab(altTarget, credential);
-          });
+          }, { priority: "high" });
         } catch (e) { altResult = { success: false, message: String(e.message || e) }; }
         const altClass = altResult?.success === true ? "success" : "alternate-failed";
         recordAttempt(job, 100 + i + 1, Date.now(), altClass, 0, `[备选${i + 1}] ${altResult?.message || ""}`);

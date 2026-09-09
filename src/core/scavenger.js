@@ -284,6 +284,11 @@ async function pollTask(task) {
     if (!uncovered.length) { status = "completed"; break; }
     // 每日预约上限(如银豹"每天预约不得超过6小时"): 当天该场馆已满额, 跳过避免无效重试; 换日期(编辑)自动解除
     if (stats.dailyBlocked?.[venueId] === task.date) continue;
+    // 抢订任务优先: 该凭证用户在本场馆有即将开抢(±窗口)或正在执行的抢订任务时, 本轮跳过避让——
+    // 避免捡漏轮询占用限流队列/风控配额, 甚至抢先订走抢订任务的目标场次
+    const avoid = db.prepare("SELECT COUNT(*) n FROM jobs WHERE venue_id=? AND user_id=? AND (status='running' OR (status='pending' AND fire_at IS NOT NULL AND fire_at>=? AND fire_at<=?))")
+      .get(venueId, task.userId, new Date(now - 120000).toISOString(), new Date(now + 180000).toISOString());
+    if (avoid.n > 0) continue;
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "场地不支持查询" }; continue; }
     // 支付优先级: 主支付 + 备选支付(主支付失败如余额不足时, 自动换备选支付重下同一批场次)
