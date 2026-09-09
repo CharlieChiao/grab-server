@@ -168,7 +168,7 @@ export function createScavengeTask(userId, input) {
   if (spanError) return { error: spanError };
   const id = crypto.randomUUID();
   const now = nowIso();
-  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_types_json,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_types_json,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime, JSON.stringify(courtTypes),
       input.allowCombine === false ? 0 : 1, input.allowPartial === false ? 0 : 1, input.allowNonrefundable === false ? 0 : 1,
       input.maxTotalCost, input.payKind, "active", "[]", "{}", now, now);
