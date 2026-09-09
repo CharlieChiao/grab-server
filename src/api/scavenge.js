@@ -10,7 +10,7 @@
 import express from "express";
 import { db } from "../core/database.js";
 import { getVenue, listVenues } from "../core/venueRegistry.js";
-import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
+import { createScavengeTask, getScavengeTask, listScavengeTasks, stopScavengeTask, updateScavengeTask, confirmScavengePayment, hhmmToMinutes, mergeIntervals, subtractIntervals } from "../core/scavenger.js";
 import { paymentParams } from "./jobs.js";
 
 const router = express.Router();
@@ -97,6 +97,13 @@ router.delete("/:id", (req, res) => {
   const task = stopScavengeTask(req.params.id, req.user.id);
   if (!task) return res.status(404).json({ error: "not found" });
   res.json({ ok: true, task: presentTask(task) });
+});
+
+// 编辑进行中的捡漏任务(时段/规则/预算/支付优先级)
+router.put("/:id", (req, res) => {
+  const result = updateScavengeTask(req.params.id, req.user.id, req.body || {});
+  if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true, task: presentTask(result.task) });
 });
 
 router.post("/:id/bookings/:index/payment-confirmed", (req, res) => {

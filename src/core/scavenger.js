@@ -156,6 +156,29 @@ export function stopScavengeTask(id, userId) {
   return getScavengeTask(id, userId);
 }
 
+// 编辑进行中的捡漏任务(时段/规则/预算/支付优先级; 已订 bookings 的分钟记账在新时段下自动重算)
+export function updateScavengeTask(id, userId, input = {}) {
+  const row = db.prepare("SELECT * FROM scavenge_tasks WHERE id=? AND user_id=?").get(id, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "active") return { error: "仅进行中的捡漏任务可编辑" };
+  const date = input.date === undefined ? row.date : String(input.date);
+  const startTime = input.startTime === undefined ? row.start_time : String(input.startTime);
+  const endTime = input.endTime === undefined ? row.end_time : String(input.endTime);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: "日期格式无效" };
+  const startMin = hhmmToMinutes(startTime), endMin = hhmmToMinutes(endTime);
+  if (startMin == null || endMin == null || endMin === startMin) return { error: "时间无效(结束需晚于开始)" };
+  const maxTotalCost = input.maxTotalCost === undefined ? Number(row.max_total_cost) : Number(input.maxTotalCost);
+  if (!Number.isFinite(maxTotalCost) || maxTotalCost <= 0) return { error: "预算必须是正数" };
+  const payKind = input.payKind === undefined ? row.pay_kind : String(input.payKind);
+  if (payKind !== "balance-first" && payKind !== "wechat-first") return { error: "支付优先级无效" };
+  const allowCombine = input.allowCombine === undefined ? !!row.allow_combine : !!input.allowCombine;
+  const allowPartial = input.allowPartial === undefined ? !!row.allow_partial : !!input.allowPartial;
+  const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
+  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
+    .run(date, startTime, endTime, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
+  return { task: getScavengeTask(id, userId) };
+}
+
 // ---------- 覆盖记账 ----------
 function coveredOf(task) {
   return mergeIntervals(task.bookings.filter((b) => !b.released).map((b) => [b.startMin, b.endMin]));
