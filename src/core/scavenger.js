@@ -248,6 +248,8 @@ async function pollTask(task) {
       const candidates = findCandidates(avail, u1, u2, task.allowCombine, budget);
       const pick = candidates.full || (task.allowPartial ? candidates.partial : null);
       if (!pick) continue;
+      // 关键流程日志: 发现可约场次(每次轮询静默, 仅在真正有机会时输出)
+      console.log(`[scavenger] task=${task.id} ${venue.meta.name} 发现可约${candidates.full ? "" : "(部分)"}: ${pick.chain.map((s) => `${s.court} ${s.time}`).join(" + ")} ¥${pick.chain.reduce((sum, x) => sum + x.cost, 0)}`);
       const outcome = await bookSlots(task, venue, credential, pick.chain, payCodes, stats);
       if (outcome) {
         bookings = [...bookings, outcome.booking];
@@ -273,21 +275,23 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
     courts: chain.map((s) => ({ court: s.court, courtUid: s.uid, time: s.time, cost: s.cost })),
     ext: { payMethod: payCode, totalCost },
   });
-  const dispatch = async (payCode, label) => {
+  // 支付语义名(码→balance/wechat), 日志与消息用
+  const payName = (code) => (code != null && code === venue.payments?.balance ? "balance" : code === venue.payments?.wechat ? "wechat" : String(code));
+  const dispatch = async (payCode, via) => {
     try {
       return await enqueueBooking(venue.meta.id, profile, async () => {
-        console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")} via=${label}`);
+        console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")} via=${via}`);
         return venue.grab(buildTarget(payCode), credential);
       });
     } catch (error) { return { success: false, message: String(error?.message || error) }; }
   };
-  let result = await dispatch(payCodes.primary, "primary");
+  let result = await dispatch(payCodes.primary, payName(payCodes.primary));
   let switchedPay = false;
   // 主支付失败(余额不足等支付侧原因)且备选支付可用 → 自动切换重下(同 slot, 微信锁场等待人工付款)
   const primaryClass = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
   if (result?.success !== true && payCodes.fallback != null && primaryClass !== "rate-limited" && primaryClass !== "success") {
-    console.log(`[scavenger] task=${task.id} primary pay failed (${String(result?.message || "").slice(0, 60)}), retrying with fallback pay`);
-    const retry = await dispatch(payCodes.fallback, "fallback");
+    console.log(`[scavenger] task=${task.id} ${payName(payCodes.primary)} 下单失败(${String(result?.message || "").slice(0, 60)}), 切换 ${payName(payCodes.fallback)} 重试`);
+    const retry = await dispatch(payCodes.fallback, payName(payCodes.fallback));
     if (retry?.success === true) {
       switchedPay = true;
       result = retry;
@@ -303,6 +307,8 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
     stats.failures = (stats.failures || 0) + 1;
     stats.lastError = String(result?.message || "").slice(0, 200);
     stats.lastErrorAt = new Date().toISOString();
+    // 关键流程日志: 最终下单失败(两种支付都试过)
+    console.warn(`[scavenger] task=${task.id} 下单失败 ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")}: ${String(result?.message || "").slice(0, 80)}`);
     if (classification === "rate-limited") applyCooldown(profile.scopeKey, 10000);
     return null;
   }
