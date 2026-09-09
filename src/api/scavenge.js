@@ -1,11 +1,11 @@
 /**
  * 捡漏任务 API — 多球场持续轮询可约场次并自动下单
  * POST /api/scavenge          创建 { venueIds, date, startTime, endTime, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind }
- *   注: payKind 仅支持 balance —— 微信支付的下单参数(script/prepay)时效短且无法凭 orderId 补付,
- *   无人值守捡漏场景下微信订单只能锁场无法完成付款, 故禁用。
+ *   微信支付(payKind=wechat)语义: 下单成功即锁场并通知用户待支付; 用户可在本小程序(下单瞬间的支付参数,
+ *   时效内有效)或场馆小程序的待付订单中补付; 超时释放后自动撤销覆盖继续捡漏。
  * GET  /api/scavenge          列表(含球场选项/凭证状态, 供创建表单)
  * DELETE /api/scavenge/:id    停止任务(保留记录)
- * POST /api/scavenge/:id/bookings/:index/payment-confirmed  确认微信支付完成(遗留通道, 新任务不再产生微信订单)
+ * POST /api/scavenge/:id/bookings/:index/payment-confirmed  确认微信支付完成
  */
 import express from "express";
 import { db } from "../core/database.js";
@@ -65,7 +65,7 @@ router.post("/", (req, res) => {
   const startMin = hhmmToMinutes(startTime), endMin = hhmmToMinutes(endTime);
   if (startMin == null || endMin == null) return res.status(400).json({ error: "时间格式无效(HH:MM)" });
   if (endMin === startMin) return res.status(400).json({ error: "结束时间需晚于开始时间" });
-  if (!["balance"].includes(payKind)) return res.status(400).json({ error: "捡漏任务仅支持余额支付：微信支付参数时效短且无法凭订单号补付，无人值守场景下只能锁场无法完成付款" });
+  if (!["balance", "wechat"].includes(payKind)) return res.status(400).json({ error: "支付方式无效" });
   const cost = Number(maxTotalCost);
   if (!Number.isFinite(cost) || cost <= 0) return res.status(400).json({ error: "最高接受价格无效" });
   // 日期窗口: 不早于今天(北京), 最多提前 14 天

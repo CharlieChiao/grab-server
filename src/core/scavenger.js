@@ -295,8 +295,11 @@ async function bookSlots(task, venue, credential, chain, payCode, stats) {
     target, raw: result.raw || null,
     createdAt: new Date().toISOString(),
   };
-  // 成功才通知(模板字段复用普通任务: thing2=场地/phrase5=结果/amount21=金额)
-  notifyJobResult({ userId: task.userId, venueId: venue.meta.id, target, status: "done", result: { ...result, message: `捡漏成功 ${venue.meta.name} ${timeRange}` } })
+  // 成功才通知(模板字段复用普通任务: thing2=场地/phrase5=结果/amount21=金额; 微信支付任务 outcome 自动为"待本人付款")
+  const pendingHint = result.requiresManualPayment === true
+    ? `捡漏锁场成功 ${venue.meta.name} ${timeRange}，请尽快完成微信支付（本小程序订单页或场馆小程序待付订单均可补付），超时订单释放后将自动继续捡漏`
+    : `捡漏成功 ${venue.meta.name} ${timeRange}`;
+  notifyJobResult({ userId: task.userId, venueId: venue.meta.id, target, status: "done", result: { ...result, message: pendingHint } })
     .catch((error) => console.warn("[scavenger-notify]", String(error?.message || error)));
   return { booking };
 }
