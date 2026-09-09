@@ -115,7 +115,10 @@ function rowToTask(row) {
     id: row.id, userId: row.user_id, venueIds, date: row.date, startTime: row.start_time, endTime: row.end_time,
     startMin, endMin, crossOvernight: endMin > 1440,
     allowCombine: !!row.allow_combine, allowPartial: !!row.allow_partial, allowNonrefundable: !!row.allow_nonrefundable,
-    maxTotalCost: Number(row.max_total_cost), payKind: row.pay_kind, status: row.status,
+    maxTotalCost: Number(row.max_total_cost),
+    // 支付优先级: balance-first(余额优先, 余额不足自动改微信锁场) / wechat-first; 兼容旧单值
+    payKind: row.pay_kind === "wechat-first" || row.pay_kind === "wechat" ? "wechat-first" : "balance-first",
+    status: row.status,
     bookings, stats, createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -200,8 +203,13 @@ async function pollTask(task) {
     if (!uncovered.length) { status = "completed"; break; }
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "场地不支持查询" }; continue; }
-    const payCode = venue.payments?.[task.payKind];
-    if (payCode == null) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: `不支持${task.payKind === "wechat" ? "微信" : "余额"}支付` }; continue; }
+    // 支付优先级: 主支付 + 备选支付(主支付失败如余额不足时, 自动换备选支付重下同一批场次)
+    const wechatFirst = task.payKind === "wechat-first";
+    const payCodes = {
+      primary: venue.payments?.[wechatFirst ? "wechat" : "balance"],
+      fallback: venue.payments?.[wechatFirst ? "balance" : "wechat"],
+    };
+    if (payCodes.primary == null && payCodes.fallback == null) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "不支持任何支付方式" }; continue; }
     const credential = getCredential(venueId, task.userId);
     if (!credential) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "未配置凭证" }; continue; }
     let slots;
@@ -240,7 +248,7 @@ async function pollTask(task) {
       const candidates = findCandidates(avail, u1, u2, task.allowCombine, budget);
       const pick = candidates.full || (task.allowPartial ? candidates.partial : null);
       if (!pick) continue;
-      const outcome = await bookSlots(task, venue, credential, pick.chain, payCode, stats);
+      const outcome = await bookSlots(task, venue, credential, pick.chain, payCodes, stats);
       if (outcome) {
         bookings = [...bookings, outcome.booking];
         covered = coveredOf({ ...task, bookings });
@@ -255,22 +263,36 @@ async function pollTask(task) {
 }
 
 // 下单(走限流队列, 与普通抢订共用 店铺+凭证 scope 正确互斥); 失败只记录不通知
-async function bookSlots(task, venue, credential, chain, payCode, stats) {
+// 支付优先级: 先用主支付下单, 失败(如余额不足/时段刚被占走前的支付类失败)自动换备选支付重下同一批场次
+async function bookSlots(task, venue, credential, chain, payCodes, stats) {
   const totalCost = chain.reduce((sum, x) => sum + x.cost, 0);
-  const target = {
+  const base = venue.riskProfile || {};
+  const profile = { ...base, scopeKey: `${base.scopeKey || venue.meta.id}:${task.userId}` };
+  const buildTarget = (payCode) => ({
     date: task.date,
     courts: chain.map((s) => ({ court: s.court, courtUid: s.uid, time: s.time, cost: s.cost })),
     ext: { payMethod: payCode, totalCost },
+  });
+  const dispatch = async (payCode, label) => {
+    try {
+      return await enqueueBooking(venue.meta.id, profile, async () => {
+        console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")} via=${label}`);
+        return venue.grab(buildTarget(payCode), credential);
+      });
+    } catch (error) { return { success: false, message: String(error?.message || error) }; }
   };
-  const base = venue.riskProfile || {};
-  const profile = { ...base, scopeKey: `${base.scopeKey || venue.meta.id}:${task.userId}` };
-  let result;
-  try {
-    result = await enqueueBooking(venue.meta.id, profile, async () => {
-      console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")}`);
-      return venue.grab(target, credential);
-    });
-  } catch (error) { result = { success: false, message: String(error?.message || error) }; }
+  let result = await dispatch(payCodes.primary, "primary");
+  let switchedPay = false;
+  // 主支付失败(余额不足等支付侧原因)且备选支付可用 → 自动切换重下(同 slot, 微信锁场等待人工付款)
+  const primaryClass = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
+  if (result?.success !== true && payCodes.fallback != null && primaryClass !== "rate-limited" && primaryClass !== "success") {
+    console.log(`[scavenger] task=${task.id} primary pay failed (${String(result?.message || "").slice(0, 60)}), retrying with fallback pay`);
+    const retry = await dispatch(payCodes.fallback, "fallback");
+    if (retry?.success === true) {
+      switchedPay = true;
+      result = retry;
+    }
+  }
   const classification = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
   stats.attempts = (stats.attempts || 0) + 1;
   try { // 审计入 job_attempts, 与普通任务共用排查入口
@@ -296,9 +318,10 @@ async function bookSlots(task, venue, credential, chain, payCode, stats) {
     createdAt: new Date().toISOString(),
   };
   // 成功才通知(模板字段复用普通任务: thing2=场地/phrase5=结果/amount21=金额; 微信支付任务 outcome 自动为"待本人付款")
+  const switchNote = switchedPay ? "（主支付失败已自动切换支付方式）" : "";
   const pendingHint = result.requiresManualPayment === true
-    ? `捡漏锁场成功 ${venue.meta.name} ${timeRange}，请尽快完成微信支付（本小程序订单页或场馆小程序待付订单均可补付），超时订单释放后将自动继续捡漏`
-    : `捡漏成功 ${venue.meta.name} ${timeRange}`;
+    ? `捡漏锁场成功 ${venue.meta.name} ${timeRange}${switchNote}，请尽快完成微信支付（本小程序订单页或场馆小程序待付订单均可补付），超时订单释放后将自动继续捡漏`
+    : `捡漏成功 ${venue.meta.name} ${timeRange}${switchNote}`;
   notifyJobResult({ userId: task.userId, venueId: venue.meta.id, target, status: "done", result: { ...result, message: pendingHint } })
     .catch((error) => console.warn("[scavenger-notify]", String(error?.message || error)));
   return { booking };
