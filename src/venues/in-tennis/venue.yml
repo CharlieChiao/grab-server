@@ -24,9 +24,6 @@ bookingHours:
   start: '07:00'
   end: '23:00'
   slotMinutes: 60
-# 场馆业务规则: 单笔订单(购物车一次结算)预订总时长不能超过 6 小时, 超限会被拒单; 捡漏链构建据此自动拆多笔
-limits:
-  maxOrderMinutes: 360
 # 开场前 N 小时内不可退款; 捡漏任务的"允许非可退款时间预定"开关依据(@todo 按门店实际退款政策校准)
 refundPolicy:
   nonRefundableHours: 24

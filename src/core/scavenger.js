@@ -245,6 +245,8 @@ async function pollTask(task) {
   for (const venueId of task.venueIds) {
     let uncovered = subtractIntervals([task.startMin, task.endMin], covered);
     if (!uncovered.length) { status = "completed"; break; }
+    // 每日预约上限(如银豹"每天预约不得超过6小时"): 当天该场馆已满额, 跳过避免无效重试; 换日期(编辑)自动解除
+    if (stats.dailyBlocked?.[venueId] === task.date) continue;
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "场地不支持查询" }; continue; }
     // 支付优先级: 主支付 + 备选支付(主支付失败如余额不足时, 自动换备选支付重下同一批场次)
@@ -351,12 +353,19 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
     stats.failures = (stats.failures || 0) + 1;
     stats.lastError = String(result?.message || "").slice(0, 200);
     stats.lastErrorAt = new Date().toISOString();
+    // 检测"每天预约不得超过N小时"类场馆日累计上限: 当天屏蔽该场馆, 防止对确定性失败无限重试
+    if (/每天.{0,8}(不超过|不得超过|超过)|每日.{0,8}(不超过|不得超过|超过)/.test(String(result?.message || ""))) {
+      stats.dailyBlocked = { ...(stats.dailyBlocked || {}), [venue.meta.id]: task.date };
+      console.warn(`[scavenger] task=${task.id} ${venue.meta.name} 触发每日预约上限, 当天(${task.date})不再尝试该场馆`);
+    }
     // 关键流程日志: 最终下单失败(两种支付都试过)
     console.warn(`[scavenger] task=${task.id} 下单失败 ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")}: ${String(result?.message || "").slice(0, 80)}`);
     if (classification === "rate-limited") applyCooldown(profile.scopeKey, 10000);
     return null;
   }
   const timeRange = `${chain[0].time}-${String(Math.floor(chain[chain.length - 1].endMin / 60)).padStart(2, "0")}:${String(chain[chain.length - 1].endMin % 60).padStart(2, "0")}`;
+  // 实际下单成功的 target(含最终使用的支付码), 供释放检测比对
+  const finalTarget = buildTarget(switchedPay ? payCodes.fallback : payCodes.primary);
   const booking = {
     venueId: venue.meta.id, venueName: venue.meta.name,
     courts: chain.map((s) => ({ court: s.court, time: s.time })),
@@ -364,7 +373,7 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
     cost: totalCost, orderId: result.orderId || null, message: result.message || "",
     requiresManualPayment: result.requiresManualPayment === true,
     paid: result.requiresManualPayment !== true,
-    target, raw: result.raw || null,
+    target: finalTarget, raw: result.raw || null,
     createdAt: new Date().toISOString(),
   };
   // 成功才通知(模板字段复用普通任务: thing2=场地/phrase5=结果/amount21=金额; 微信支付任务 outcome 自动为"待本人付款")
@@ -372,7 +381,7 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
   const pendingHint = result.requiresManualPayment === true
     ? `捡漏锁场成功 ${venue.meta.name} ${timeRange}${switchNote}，请尽快完成微信支付（本小程序订单页或场馆小程序待付订单均可补付），超时订单释放后将自动继续捡漏`
     : `捡漏成功 ${venue.meta.name} ${timeRange}${switchNote}`;
-  notifyJobResult({ userId: task.userId, venueId: venue.meta.id, target, status: "done", result: { ...result, message: pendingHint } })
+  notifyJobResult({ userId: task.userId, venueId: venue.meta.id, target: finalTarget, status: "done", result: { ...result, message: pendingHint } })
     .catch((error) => console.warn("[scavenger-notify]", String(error?.message || error)));
   return { booking };
 }
