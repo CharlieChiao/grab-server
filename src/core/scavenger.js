@@ -117,7 +117,7 @@ function rowToTask(row) {
   return {
     id: row.id, userId: row.user_id, venueIds, date: row.date, startTime: row.start_time, endTime: row.end_time,
     startMin, endMin, crossOvernight: endMin > 1440,
-    courtType: row.court_type || null,
+    courtTypes: parseCourtTypes(row.court_types_json),
     allowCombine: !!row.allow_combine, allowPartial: !!row.allow_partial, allowNonrefundable: !!row.allow_nonrefundable,
     maxTotalCost: Number(row.max_total_cost),
     // 支付优先级: balance-first(余额优先, 余额不足自动改微信锁场) / wechat-first; 兼容旧单值
@@ -127,6 +127,15 @@ function rowToTask(row) {
   };
 }
 // 场地类型映射(来自 yml courts[].type): uid 优先匹配, 场次名前缀兜底(银豹场次名带门店后缀)
+// 任务限定类型数组解析: 非空数组(空/损坏兜底网球, 类型必选且不限已废弃)
+function parseCourtTypes(json) {
+  try {
+    const arr = JSON.parse(json || "null");
+    if (Array.isArray(arr) && arr.length) return arr.map(String).filter(Boolean);
+  } catch {}
+  return ["tennis"];
+}
+
 export function courtTypeMap(venue) {
   const courts = venue?.meta?.courts || []; // registry 归一后的场地表(类型已收拢为标准 key)
   const byUid = new Map(), byName = new Map();
@@ -149,7 +158,8 @@ function validateOrderSpan(venueIds, startMin, endMin, allowPartial) {
 }
 
 export function createScavengeTask(userId, input) {
-  if (!input.courtType) return { error: "必须选择场地类型" }; // 不限类型已废弃(误抢风险)
+  const courtTypes = [...new Set((input.courtTypes || []).map(String).filter(Boolean))];
+  if (!courtTypes.length) return { error: "必须至少选择一种场地类型" }; // 不限类型已废弃(误抢风险)
   let sMin = hhmmToMinutes(input.startTime), eMin = hhmmToMinutes(input.endTime);
   if (sMin == null || eMin == null) return { error: "时间格式无效(HH:MM)" };
   if (eMin <= sMin) eMin += 1440; // 跨天
@@ -157,8 +167,8 @@ export function createScavengeTask(userId, input) {
   if (spanError) return { error: spanError };
   const id = crypto.randomUUID();
   const now = nowIso();
-  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_type,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime, input.courtType || null,
+  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_types_json,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime, JSON.stringify(courtTypes),
       input.allowCombine === false ? 0 : 1, input.allowPartial === false ? 0 : 1, input.allowNonrefundable === false ? 0 : 1,
       input.maxTotalCost, input.payKind, "active", "[]", "{}", now, now);
   return getScavengeTask(id, userId);
@@ -208,10 +218,13 @@ export function updateScavengeTask(id, userId, input = {}) {
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
   const spanError = validateOrderSpan(JSON.parse(row.venue_ids_json || "[]"), startMin, endMin, allowPartial);
   if (spanError) return { error: spanError };
-  const courtType = input.courtType === undefined ? (row.court_type || "tennis") : String(input.courtType || "");
-  if (!courtType) return { error: "必须选择场地类型" };
-  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_type=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
-    .run(date, startTime, endTime, courtType, allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
+  let courtTypes = parseCourtTypes(row.court_types_json);
+  if (input.courtTypes !== undefined) {
+    courtTypes = [...new Set((input.courtTypes || []).map(String).filter(Boolean))];
+    if (!courtTypes.length) return { error: "必须至少选择一种场地类型" };
+  }
+  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_types_json=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
+    .run(date, startTime, endTime, JSON.stringify(courtTypes), allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
   return { task: getScavengeTask(id, userId) };
 }
 
@@ -295,14 +308,15 @@ async function pollTask(task) {
       nonRefundableHours: venue.meta?.raw?.refundPolicy?.nonRefundableHours, now,
     };
     const avail = [];
-    const typeOf = task.courtType ? courtTypeMap(venue) : null; // 场地类型硬过滤: 任务的限定类型
+    const wantedTypes = new Set(task.courtTypes);
+    const typeOf = courtTypeMap(venue); // 场地类型硬过滤: 任务限定的类型集合(多选)
     for (const slot of slots) {
       const parsed = normalizeSlot(slot, ctx);
       if (!parsed || !parsed.available || parsed.cost <= 0) continue;
       if (!task.allowNonrefundable && parsed.nonRefundable) continue;
       if (!uncovered.some(([u1, u2]) => parsed.beginMin >= u1 && parsed.endMin <= u2)) continue;
       // 严格遵守限定场地类型: 类型未知(未在 yml 登记)的场次一律不订, 防止误抢
-      if (task.courtType && typeOf(slot) !== task.courtType) continue;
+      if (!wantedTypes.has(typeOf(slot))) continue;
       avail.push(parsed);
     }
     // 逐个未覆盖区间尝试下单(先铺满, 铺不满且允许部分则订最长连续段)

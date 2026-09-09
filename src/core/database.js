@@ -66,8 +66,9 @@ function ensureTableColumn(table, name, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   }
 }
-ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(tennis/pickle/...), 必填
-db.exec("UPDATE scavenge_tasks SET court_type='tennis' WHERE court_type IS NULL"); // 存量任务统一迁移为网球(不限类型太危险, 已废弃)
+ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(旧单值列, 已被 court_types_json 取代)
+ensureTableColumn("scavenge_tasks", "court_types_json", "TEXT"); // 捡漏任务限定的场地类型数组(tennis/pickle/...), 至少一项
+db.exec("UPDATE scavenge_tasks SET court_types_json=? WHERE court_types_json IS NULL OR court_types_json=''", JSON.stringify(["tennis"])); // 存量统一迁移为网球
 
 for (const table of ["jobs", "job_history"]) {
   ensureTableColumn(table, "created_by_user_id", "TEXT");
