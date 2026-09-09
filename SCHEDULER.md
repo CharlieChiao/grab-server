@@ -38,6 +38,20 @@ updateJob(running) → 循环 attempt 1..maxAttempts:
 
 ## 模块函数索引
 
+### scavenger.js — 捡漏任务调度
+| 函数 | 说明 |
+|---|---|
+| `startScavenger()` / `stopScavenger()` | 启停 1s tick 循环 |
+| `tick()` | 遍历 active 任务: 时段过期自动结束; 每任务按 `5s±4s` 随机间隔轮询(模拟人为刷新) |
+| `pollTask(task)` | 每球场 listSlots → 过滤(可约/未覆盖区间/退款约束) → 链搜索 → 立即下单(走 enqueueBooking 限流, 与普通抢订同 scope 互斥) |
+| `findCandidates(slots, from, to, allowCombine, budget)` | 链搜索: full=精确铺满区间 / partial=最长连续段(同价单场地优先) |
+| `mergeIntervals` / `subtractIntervals` | 覆盖记账: 任务时段减已订区间得未覆盖区间(跨球场全局, 同段时间不重复订) |
+| `normalizeSlot(slot, ctx)` | 两种适配器 slot 归一化, end 统一按 slotMinutes 推算, 按 refundPolicy 识别不可退款 |
+| `bookSlots(...)` | 失败仅记 job_attempts + stats(不通知); 成功记 booking + notifyJobResult |
+| 未支付订单释放检测 | 待支付 booking 的场次重新可约 = 订单已释放, 撤销覆盖继续搜索 |
+
+捡漏任务状态: active → completed(全覆盖/时段过) / stopped(用户停止)。API 见 `src/api/scavenge.js`, 表 `scavenge_tasks`。
+
 ### scheduler.js — 调度主循环
 | 函数 | 说明 |
 |---|---|

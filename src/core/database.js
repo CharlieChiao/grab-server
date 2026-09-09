@@ -31,6 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_delegations_owner ON delegations(owner_user_id, s
 CREATE INDEX IF NOT EXISTS idx_delegations_delegate ON delegations(delegate_user_id, status);
 CREATE TABLE IF NOT EXISTS task_groups (uid TEXT PRIMARY KEY, created_by_user_id TEXT NOT NULL, name TEXT NOT NULL, success_policy TEXT NOT NULL DEFAULT 'all', repeat_weekly INTEGER NOT NULL DEFAULT 0, iteration INTEGER NOT NULL DEFAULT 1, series_uid TEXT NOT NULL, previous_group_uid TEXT, next_group_uid TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_task_groups_creator ON task_groups(created_by_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS scavenge_tasks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, venue_ids_json TEXT NOT NULL, date TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL, allow_combine INTEGER NOT NULL DEFAULT 1, allow_partial INTEGER NOT NULL DEFAULT 1, allow_nonrefundable INTEGER NOT NULL DEFAULT 1, max_total_cost REAL NOT NULL, pay_kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', bookings_json TEXT NOT NULL DEFAULT '[]', stats_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_scavenge_user ON scavenge_tasks(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scavenge_status ON scavenge_tasks(status);
 `);
 const legacyJobsFile = path.join(root, "config", "jobs.json");
 function ensureUserColumn(name, definition) {

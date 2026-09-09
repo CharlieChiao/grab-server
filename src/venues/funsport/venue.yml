@@ -22,6 +22,9 @@ bookingHours:
   end: '00:00'
   slotMinutes: 60
   slotEndOffsetMinutes: -1
+# 开场前 N 小时内不可退款; 捡漏任务的"允许非可退款时间预定"开关依据(@todo 按门店实际退款政策校准)
+refundPolicy:
+  nonRefundableHours: 24
 releaseRetry:
   unavailableGraceMs: 15000
   defaultMinIntervalMs: 3000

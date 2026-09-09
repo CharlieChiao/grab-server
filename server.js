@@ -15,6 +15,8 @@ import discoveryApi from "./src/api/discovery.js";
 import venueConfigApi from "./src/api/venueConfig.js";
 import delegationsApi from "./src/api/delegations.js";
 import { startRiskCalibrationScheduler } from "./src/core/riskCalibration.js";
+import scavengeApi from "./src/api/scavenge.js";
+import { startScavenger } from "./src/core/scavenger.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -38,6 +40,7 @@ async function main() {
   app.use("/api", venueConfigApi);
   app.use("/api/jobs", jobsApi);
   app.use("/api/job-groups", jobGroupsApi);
+  app.use("/api/scavenge", scavengeApi);
   app.use("/api", readyApi);
 
   app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
@@ -64,6 +67,7 @@ async function main() {
   // 鍚姩璋冨害鍣?瀹氭椂寮€鎶?+ 姣忓皬鏃跺績璺?+ 寮€鎶㈠墠姣忓垎閽熸娴?
   startScheduler();
   startRiskCalibrationScheduler();
+  startScavenger();
 
   app.listen(PORT, () => {
     console.log(`[server] listening on :${PORT}`);

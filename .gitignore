@@ -9,5 +9,7 @@ deploy/backup-*/
 config/risk-profiles.json
 
 .runtime.env
+.wecom-bot.env
+data/wecom-bot.json
 data/grab.sqlite*
 analysis/

@@ -9,7 +9,7 @@ import { expireAwaitingPayments, finishPayment } from "../core/paymentLifecycle.
 
 const router = express.Router();
 
-function paymentParams(job) {
+export function paymentParams(job) {
   let script = job?.result?.raw?.result?.script; // 银豹: raw.result.script
   if (!script) script = job?.result?.raw?.data?.result?.jsConfig; // CRMEB: raw.data.result.jsConfig
   if (typeof script === "string") {
