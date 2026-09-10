@@ -13,3 +13,4 @@ config/risk-profiles.json
 data/wecom-bot.json
 data/grab.sqlite*
 analysis/
+src/venues/*/venue.yml.bak
