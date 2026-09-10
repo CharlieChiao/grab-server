@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import yaml from "js-yaml";
 import { computeReleaseTimeUTC, autoFireAt } from "../src/core/timeUtil.js";
-import { refineUnavailableReason } from "../src/core/scheduler.js";
+import { refineUnavailableReason, unavailableReasonFromSlots } from "../src/core/scheduler.js";
 import { db } from "../src/core/database.js";
 const venueConfig = yaml.load(fs.readFileSync(new URL("../src/venues/picklepop/venue.yml", import.meta.url), "utf8"));
 
@@ -35,6 +35,11 @@ test("unavailable booking failure is refined with slot-level reason", async () =
   const multi = { target: { date: "2026-09-09", courts: [{ courtUid: "court-a", time: "19:00" }, { courtUid: "court-a", time: "20:00" }] } };
   const multiReason = await refineUnavailableReason(mockVenue, multi, {}, "该时段不可约");
   assert.equal(multiReason, "19:00已被排课、20:00已被预约");
+  const alternateReason = unavailableReasonFromSlots(
+    { date: "2026-09-09", courts: [{ courtUid: "court-a", time: "20:00" }] },
+    await mockVenue.listSlots(),
+  );
+  assert.equal(alternateReason, "20:00已被预约");
   // 非"不可约"消息不触发回查
   assert.equal(await refineUnavailableReason(mockVenue, job, {}, "余额不足"), null);
 });

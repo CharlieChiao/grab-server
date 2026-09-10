@@ -46,28 +46,32 @@ function schedulePreciseFire(job, fireMs) {
   console.log(`[schedule] job=${job.id} fireAt=${new Date(fireMs).toISOString()}`);
 }
 
+export function unavailableReasonFromSlots(target, slots) {
+  const wanted = Array.isArray(target?.courts) && target.courts.length
+    ? target.courts.map((c) => ({ uid: c.courtUid, court: c.court, time: c.time || target.time }))
+    : [{ uid: target?.courtUid, court: target?.court, time: target?.time }];
+  const reasons = [];
+  for (const slot of slots || []) {
+    for (const w of wanted) {
+      const courtMatch = w.uid ? String(slot.uid) === String(w.uid) : String(slot.court || "") === String(w.court || "");
+      const timeMatch = String(slot.begin || "").slice(11, 16) === String(w.time || "").slice(0, 5);
+      if (courtMatch && timeMatch && !slot.canAppoint) {
+        const match = /(\d{2}:\d{2})-\d{2}:\d{2}场次(.+)$/.exec(String(slot.message || ""));
+        const text = match ? `${match[1]}${match[2]}` : String(slot.message || "不可约");
+        if (!reasons.includes(text)) reasons.push(text);
+      }
+    }
+  }
+  return reasons.length ? reasons.join("、") : null;
+}
+
 // 下单报"不可约"时回查 listSlots, 把银豹的细分原因(已被预约/已被锁场/已被排课)附加到失败消息
 export async function refineUnavailableReason(venue, job, credential, message) {
   if (!/不可约|不可预约/.test(String(message || ""))) return null;
   if (typeof venue?.listSlots !== "function") return null;
   try {
     const slots = await venue.listSlots({ date: job.target?.date }, credential);
-    const wanted = Array.isArray(job.target?.courts) && job.target.courts.length
-      ? job.target.courts.map((c) => ({ uid: c.courtUid, court: c.court, time: c.time || job.target.time }))
-      : [{ uid: job.target?.courtUid, court: job.target?.court, time: job.target?.time }];
-    const reasons = [];
-    for (const slot of slots) {
-      for (const w of wanted) {
-        const courtMatch = w.uid ? String(slot.uid) === String(w.uid) : String(slot.court || "") === String(w.court || "");
-        const timeMatch = String(slot.begin || "").slice(11, 16) === String(w.time || "").slice(0, 5);
-        if (courtMatch && timeMatch && !slot.canAppoint) {
-          const match = /(\d{2}:\d{2})-\d{2}:\d{2}场次(.+)$/.exec(String(slot.message || ""));
-          const text = match ? `${match[1]}${match[2]}` : String(slot.message || "不可约");
-          if (!reasons.includes(text)) reasons.push(text);
-        }
-      }
-    }
-    return reasons.length ? reasons.join("、") : null;
+    return unavailableReasonFromSlots(job.target, slots);
   } catch {
     return null;
   }
@@ -215,10 +219,21 @@ async function runGrab(job, credentialArg, venueArg) {
           result = { ...altResult, message: `主目标失败（${result?.message || "未知"}），已改用备选 ${altLabel} 下单成功：${altResult.message || ""}` };
           break;
         }
-        alternateFailures.push(`备选${i + 1} ${altLabel}：${altMessage}`);
+        alternateFailures.push({ attempt: 100 + i + 1, index: i + 1, target: altTarget, label: altLabel, message: altMessage });
       }
       if (result?.success !== true && alternateFailures.length) {
-        result = { ...result, message: `${result?.message || "主目标失败"}；已尝试 ${alternateFailures.length} 个备选，均未成功（${alternateFailures.join("；")}）` };
+        let diagnosticSlots = null;
+        if (alternateFailures.some((failure) => /不可约|不可预约/.test(failure.message)) && typeof venue.listSlots === "function") {
+          try { diagnosticSlots = await venue.listSlots({ date: job.target?.date }, credential); } catch {}
+        }
+        const details = alternateFailures.map((failure) => {
+          const reason = diagnosticSlots ? unavailableReasonFromSlots(failure.target, diagnosticSlots) : null;
+          const message = reason && !failure.message.includes(reason) ? `${failure.message}（${reason}）` : failure.message;
+          try { db.prepare("UPDATE job_attempts SET message=? WHERE job_id=? AND attempt=?").run(`[备选${failure.index}] ${message}`, job.id, failure.attempt); } catch {}
+          if (reason) console.warn(`[grab] job=${job.id} alternate=${failure.index}/${alternates.length} detail=${reason}`);
+          return `备选${failure.index} ${failure.label}：${message}`;
+        });
+        result = { ...result, message: `${result?.message || "主目标失败"}；已尝试 ${details.length} 个备选，均未成功（${details.join("；")}）` };
       }
     }
     elapsedMs = Date.now() - startedMs;
