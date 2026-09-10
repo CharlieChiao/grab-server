@@ -8,6 +8,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "grab-payment-"));
 process.env.GRAB_DB_FILE = path.join(tempDir, "payment.sqlite");
 const jobs = await import("../src/core/jobStore.js");
 const payments = await import("../src/core/paymentLifecycle.js");
+const groups = await import("../src/core/jobGroups.js");
 const { db } = await import("../src/core/database.js");
 
 function delegatedWechatJob() {
@@ -26,6 +27,19 @@ test("delegated manual-payment booking remains active while awaiting payment", (
   assert.equal(waiting.result.paymentTimeoutMinutes, 15);
   assert.equal(jobs.listJobs().some((item) => item.id === job.id), true);
   assert.equal(jobs.listHistoryForUser("owner").length, 0);
+});
+
+test("awaiting payment stops no sibling, paid any-success job stops pending siblings", () => {
+  const group = groups.createJobGroup("payment-group-user", { name: "微信支付任务组", successPolicy: "any" });
+  const paying = jobs.createJob({ userId: "payment-group-user", venueId: "picklepop", groupUid: group.uid, target: { date: "2099-01-02", court: "A", time: "19:00", ext: { payMethod: 900 } } });
+  const sibling = jobs.createJob({ userId: "payment-group-user", venueId: "picklepop", groupUid: group.uid, target: { date: "2099-01-02", court: "B", time: "20:00" } });
+  payments.markAwaitingPayment(paying, { success: true, orderId: "order-group", requiresManualPayment: true }, 100, 3_000_000);
+  assert.equal(jobs.listJobs().find((job) => job.id === sibling.id).status, "pending");
+
+  payments.finishPayment(paying.id, 3_001_000);
+  assert.equal(jobs.listJobs().some((job) => job.id === sibling.id), false);
+  assert.equal(jobs.listHistoryForUser("payment-group-user").find((job) => job.id === sibling.id).status, "stopped");
+  assert.equal(groups.getJobGroup(group.uid, "payment-group-user").outcome, "success");
 });
 
 test("slot availability fallback only matches the booked court and time", () => {

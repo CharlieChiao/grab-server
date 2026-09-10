@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
 import { paymentKind } from "./payCodes.js";
+import { archiveJob, updateJob } from "./jobStore.js";
 
 const rowToGroup = (row) => row && ({
   uid: row.uid,
@@ -72,6 +73,24 @@ export function updateJobGroup(uid, userId, input = {}) {
 
 export function stopJobGroup(uid, userId) {
   return db.prepare("UPDATE task_groups SET status='stopped',repeat_weekly=0,updated_at=? WHERE uid=? AND created_by_user_id=?").run(nowIso(), uid, userId).changes > 0;
+}
+
+// 仅“任一成功”组会在成员真正完成后停止其余待执行任务。
+// awaiting_payment 不调用这里，避免尚未支付时提前停止兄弟任务。
+export function stopPendingSiblingsAfterAnySuccess(groupUid, succeededJobId) {
+  if (!groupUid) return [];
+  const group = db.prepare("SELECT success_policy FROM task_groups WHERE uid=? AND status='active'").get(groupUid);
+  if (!group || group.success_policy !== "any") return [];
+  const siblings = db.prepare("SELECT id FROM jobs WHERE group_uid=? AND status='pending' AND id!=?").all(groupUid, succeededJobId);
+  const stoppedJobs = [];
+  for (const sibling of siblings) {
+    const stopped = updateJob(sibling.id, { status: "stopped", result: { success: false, message: "组内已有任务成功, 自动停止" } });
+    if (!stopped) continue;
+    archiveJob(stopped.id);
+    stoppedJobs.push(stopped);
+    console.log(`[group] ${groupUid} 成员 ${succeededJobId} 成功, 停止兄弟任务 ${stopped.id}`);
+  }
+  return stoppedJobs;
 }
 
 const plusWeek = (value) => {

@@ -1,6 +1,6 @@
 import { listJobs, updateJob, archiveJob } from "./jobStore.js";
 import { notifyJobResult } from "./notifications.js";
-import { finalizeAndRepeatGroup } from "./jobGroups.js";
+import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess } from "./jobGroups.js";
 import { getVenue } from "./venueRegistry.js";
 import { getCredential } from "./credentialStore.js";
 import { enqueueBooking } from "./requestLimiter.js";
@@ -188,5 +188,10 @@ export async function expireAwaitingPayments(now = Date.now()) {
 function finishAndArchive(job) {
   notifyJobResult(job).catch((error) => console.warn("[notification]", error.message));
   archiveJob(job.id);
+  if (job.status === "done") {
+    for (const stopped of stopPendingSiblingsAfterAnySuccess(job.groupUid, job.id)) {
+      notifyJobResult(stopped).catch(() => {});
+    }
+  }
   finalizeAndRepeatGroup(job.groupUid);
 }

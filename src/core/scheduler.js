@@ -5,7 +5,7 @@ import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
-import { finalizeAndRepeatGroup } from "./jobGroups.js";
+import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess } from "./jobGroups.js";
 import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable } from "./paymentLifecycle.js";
 
 const TICK_MS = 1000;
@@ -227,13 +227,13 @@ async function runGrab(job, credentialArg, venueArg) {
     const outcome = result?.success ? "success" : "failed";
     console[result?.success ? "log" : "warn"](`[grab] job=${job.id} venue=${job.venueId} ${outcome} elapsedMs=${elapsedMs}${result?.orderId ? ` orderId=${result.orderId}` : ""} message=${String(result?.message || "").slice(0, 160)}`);
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
-    if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
-    // 任务组语义: 任一成员成功后, 其余待执行成员直接停止(新状态 stopped), 不再开抢
-    if (result?.success && completed?.groupUid) {
-      const siblings = db.prepare("SELECT id FROM jobs WHERE group_uid=? AND status='pending' AND id!=?").all(completed.groupUid, job.id);
-      for (const s of siblings) {
-        const stopped = updateJob(s.id, { status: "stopped", result: { success: false, message: "组内已有任务成功, 自动停止" } });
-        if (stopped) { console.log(`[group] ${completed.groupUid} 成员 ${job.id} 成功, 停止兄弟任务 ${s.id}`); archiveJob(s.id); notifyJobResult(stopped).catch(() => {}); }
+    if (completed) {
+      notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
+      archiveJob(completed.id);
+      if (result?.success) {
+        for (const stopped of stopPendingSiblingsAfterAnySuccess(completed.groupUid, completed.id)) {
+          notifyJobResult(stopped).catch(() => {});
+        }
       }
       finalizeAndRepeatGroup(completed.groupUid);
     }
