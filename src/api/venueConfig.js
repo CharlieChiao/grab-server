@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "../core/database.js";
 import { listVenues, loadVenues } from "../core/venueRegistry.js";
+import { prepareLogPayload } from "../core/serverLogs.js";
 const router = express.Router();
 const venuesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "venues");
 
@@ -34,9 +35,29 @@ function configPath(id){ if(!/^[a-z0-9_-]+$/i.test(id))return null; const file=p
 function validate(id,text){ if(Buffer.byteLength(text,"utf8")>262144)throw new Error("配置不能超过 256KB"); const value=yaml.load(text); if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("YAML 根节点必须是对象"); if(value.id&&String(value.id)!==id)throw new Error("配置 id 与球场 id 不一致"); if(!value.name)throw new Error("缺少 name"); if(!value.bookingHours?.start||!value.bookingHours?.end)throw new Error("缺少 bookingHours.start/end"); return value; }
 const execFileAsync = promisify(execFile);
 router.get("/developer/logs", requireDeveloper, async (req,res) => {
-  const lines=Math.max(20,Math.min(500,Number(req.query.lines)||150));
-  try { const {stdout}=await execFileAsync("journalctl",["-u","grab-server","-n",String(lines),"--no-pager","-o","short-iso"],{timeout:5000,maxBuffer:512*1024}); const maxBytes=96*1024; const raw=Buffer.from(stdout,"utf8"); const truncated=raw.length>maxBytes; const logs=(truncated ? "[日志过长，已仅保留末尾 96KB]\n" : "")+raw.subarray(Math.max(0,raw.length-maxBytes)).toString("utf8"); res.set("Cache-Control","no-store").json({ok:true,logs,truncated}); }
+  const lines=Math.max(20,Math.min(1000,Number(req.query.lines)||300));
+  const scope=req.query.scope==="business"?"business":"all";
+  const hours=Math.max(1,Math.min(168,Number(req.query.hours)||24));
+  const args=scope==="business"
+    ? ["-u","grab-server","--since",`${hours} hours ago`,"-n","5000","--no-pager","-o","short-iso"]
+    : ["-u","grab-server","-n",String(lines),"--no-pager","-o","short-iso"];
+  try { const {stdout}=await execFileAsync("journalctl",args,{timeout:5000,maxBuffer:4*1024*1024}); const payload=prepareLogPayload(stdout,{business:scope==="business",lines}); res.set("Cache-Control","no-store").json({ok:true,...payload,scope,hours:scope==="business"?hours:null}); }
   catch(error) { res.status(502).json({error:"读取服务器日志失败",detail:String(error.message||error)}); }
+});
+let restartQueued = false;
+router.post("/developer/restart", requireDeveloper, async (req,res) => {
+  if (restartQueued) return res.status(409).json({error:"服务重启已在处理中"});
+  restartQueued = true;
+  const unit = `grab-server-restart-${Date.now()}`;
+  try {
+    await execFileAsync("/usr/bin/systemd-run", ["--unit",unit,"--on-active=2s","--collect","/usr/bin/systemctl","restart","grab-server"], {timeout:5000});
+    console.warn(`[server-restart] requested by user=${req.user.id} unit=${unit}`);
+    res.status(202).json({ok:true,message:"重启指令已发送，服务将在几秒内恢复"});
+  } catch (error) {
+    restartQueued=false;
+    console.error("[server-restart]", String(error.message||error));
+    res.status(500).json({error:"无法安排服务重启"});
+  }
 });
 router.use("/developer/venue-configs",requireDeveloper);
 router.get("/developer/venue-configs",(req,res)=>res.json({ok:true,venues:listVenues()}));
