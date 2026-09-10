@@ -178,10 +178,11 @@ async function runGrab(job, credentialArg, venueArg) {
       // The serial limiter already enforces minIntervalMs plus jitter after every booking call.
       if (classification !== "release-pending") await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    const elapsedMs = Date.now() - startedMs;
+    let elapsedMs = Date.now() - startedMs;
     // 主目标失败后依次尝试备选目标(同球场同凭证, date/payMethod 沿用主任务, 成功即停)
     // 备选同样走限流队列(同 scope 排队), 其结果继续进入待支付/兜底/终态统一流程
     const alternates = Array.isArray(job.target?.alternates) ? job.target.alternates : [];
+    const alternateFailures = [];
     if (result?.success !== true && alternates.length) {
       for (let i = 0; i < alternates.length; i++) {
         const alt = alternates[i];
@@ -192,22 +193,35 @@ async function runGrab(job, credentialArg, venueArg) {
         if (alt.time) altTarget.time = alt.time;
         if (alt.cost != null) { altTarget.cost = alt.cost; altTarget.ext = { ...altTarget.ext, totalCost: alt.cost }; }
         let altResult = null;
+        let altDispatchedMs = null;
         try {
           const limiterProfile = { ...adapterProfile, scopeKey: `${adapterProfile.scopeKey || job.venueId}:${job.userId}` };
           altResult = await enqueueBooking(job.venueId, limiterProfile, async () => {
-            console.log(`[dispatch] job=${job.id} alternate=${i + 1}/${alternates.length} at=${new Date().toISOString()}`);
+            altDispatchedMs = Date.now();
+            console.log(`[dispatch] job=${job.id} alternate=${i + 1}/${alternates.length} at=${new Date(altDispatchedMs).toISOString()}`);
             return venue.grab(altTarget, credential);
           }, { priority: "high" });
         } catch (e) { altResult = { success: false, message: String(e.message || e) }; }
         const altClass = altResult?.success === true ? "success" : "alternate-failed";
-        recordAttempt(job, 100 + i + 1, Date.now(), altClass, 0, `[备选${i + 1}] ${altResult?.message || ""}`);
+        const altFinishedMs = Date.now();
+        const altCourts = Array.isArray(alt.courts)
+          ? alt.courts.map((court) => `${court.court || court.courtUid || ""} ${court.time || ""}`.trim()).join(" + ")
+          : String(alt.court || alt.courtUid || "");
+        const altLabel = `${altCourts} ${!Array.isArray(alt.courts) ? (alt.time || "") : ""}`.trim() || "未命名备选";
+        const altMessage = String(altResult?.message || (altResult?.success ? "下单成功" : "未知失败")).slice(0, 160);
+        recordAttempt(job, 100 + i + 1, altDispatchedMs || altFinishedMs, altClass, altDispatchedMs ? altFinishedMs - altDispatchedMs : 0, `[备选${i + 1}] ${altMessage}`);
+        console[altResult?.success === true ? "log" : "warn"](`[grab] job=${job.id} alternate=${i + 1}/${alternates.length} ${altResult?.success === true ? "success" : "failed"} target=${altLabel} message=${altMessage}`);
         if (altResult?.success === true) {
-          const altDesc = alt.court || (Array.isArray(alt.courts) ? alt.courts.map((c) => c.court || c).join("+") : "") || "";
-          result = { ...altResult, message: `主目标失败（${result?.message || "未知"}），已改用备选 ${altDesc} ${alt.time || ""} 下单成功：${altResult.message || ""}` };
+          result = { ...altResult, message: `主目标失败（${result?.message || "未知"}），已改用备选 ${altLabel} 下单成功：${altResult.message || ""}` };
           break;
         }
+        alternateFailures.push(`备选${i + 1} ${altLabel}：${altMessage}`);
+      }
+      if (result?.success !== true && alternateFailures.length) {
+        result = { ...result, message: `${result?.message || "主目标失败"}；已尝试 ${alternateFailures.length} 个备选，均未成功（${alternateFailures.join("；")}）` };
       }
     }
+    elapsedMs = Date.now() - startedMs;
     if (requiresManualPayment(job, result)) {
       console.log(`[grab] job=${job.id} venue=${job.venueId} awaiting-payment elapsedMs=${elapsedMs} orderId=${result.orderId} message=${String(result.message || "订单已创建").slice(0, 160)}`);
       markAwaitingPayment(job, result, elapsedMs);
