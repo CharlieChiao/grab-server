@@ -208,7 +208,11 @@ async function runGrab(job, credentialArg, venueArg) {
         }
       }
     }
-    if (requiresManualPayment(job, result)) { markAwaitingPayment(job, result, elapsedMs); return; }
+    if (requiresManualPayment(job, result)) {
+      console.log(`[grab] job=${job.id} venue=${job.venueId} awaiting-payment elapsedMs=${elapsedMs} orderId=${result.orderId} message=${String(result.message || "订单已创建").slice(0, 160)}`);
+      markAwaitingPayment(job, result, elapsedMs);
+      return;
+    }
     if (result?.success !== true && fallbackEnabled(job)) {
       // 余额支付失败(如授权方余额不足)时, 用创建任务者本人余额兜底
       const fallback = await creatorBalanceFallback(job, Date.now());
@@ -220,6 +224,8 @@ async function runGrab(job, credentialArg, venueArg) {
       const reason = await refineUnavailableReason(venue, job, credential, result?.message);
       if (reason && !String(result.message || "").includes(reason)) result = { ...result, message: `${result.message}（${reason}）` };
     }
+    const outcome = result?.success ? "success" : "failed";
+    console[result?.success ? "log" : "warn"](`[grab] job=${job.id} venue=${job.venueId} ${outcome} elapsedMs=${elapsedMs}${result?.orderId ? ` orderId=${result.orderId}` : ""} message=${String(result?.message || "").slice(0, 160)}`);
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) { notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
     // 任务组语义: 任一成员成功后, 其余待执行成员直接停止(新状态 stopped), 不再开抢
