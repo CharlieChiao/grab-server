@@ -71,6 +71,44 @@ test("fallback switch reroutes timeout into balance booking attempt", async () =
   assert.match(archived.result.message, /余额兜底未成功: unknown venue: picklepop/);
 });
 
+test("released payment falls back from owner balance to creator balance and completes any-success group", async () => {
+  const { loadVenues, getVenue } = await import("../src/core/venueRegistry.js");
+  const { setCredential } = await import("../src/core/credentialStore.js");
+  await loadVenues();
+  const venue = getVenue("picklepop");
+  assert.ok(venue);
+  const attempts = [];
+  venue.grab = async (_target, credential) => {
+    attempts.push(credential.account);
+    return credential.account === "owner"
+      ? { success: false, message: "授权方余额不足" }
+      : { success: true, orderId: "fallback-order", message: "创建者余额支付成功" };
+  };
+
+  const ownerUserId = "fallback-owner";
+  const creatorUserId = "fallback-creator";
+  setCredential("picklepop", { account: "owner" }, ownerUserId);
+  setCredential("picklepop", { account: "creator" }, creatorUserId);
+  const now = new Date().toISOString();
+  const delegationId = "fallback-delegation";
+  db.prepare("INSERT INTO delegations(id,owner_user_id,delegate_user_id,valid_until,allowed_payments_json,status,created_at,updated_at) VALUES(?,?,?,?,?,'active',?,?)")
+    .run(delegationId, ownerUserId, creatorUserId, null, JSON.stringify(["wechat", "balance"]), now, now);
+
+  const group = groups.createJobGroup(creatorUserId, { name: "余额兜底组", successPolicy: "any" });
+  const paying = jobs.createJob({ userId: ownerUserId, createdByUserId: creatorUserId, delegationId, venueId: "picklepop", groupUid: group.uid, target: { date: "2099-01-03", court: "A", time: "19:00", ext: { payMethod: 900, fallbackBalance: true } } });
+  const sibling = jobs.createJob({ userId: creatorUserId, venueId: "picklepop", groupUid: group.uid, target: { date: "2099-01-03", court: "B", time: "20:00" } });
+  payments.markAwaitingPayment(paying, { success: true, orderId: "wechat-order", requiresManualPayment: true }, 100, 4_000_000);
+
+  const completed = await payments.fallbackBalanceBooking(jobs.listJobs().find((job) => job.id === paying.id), "场次已释放", 4_001_000);
+  assert.deepEqual(attempts, ["owner", "creator"]);
+  assert.equal(completed.status, "done");
+  assert.equal(completed.result.success, true);
+  assert.equal(completed.result.paymentStatus, "fallback-paid");
+  assert.equal(completed.result.paymentFallbackBy, "creator");
+  assert.equal(jobs.listHistoryForUser(creatorUserId).find((job) => job.id === sibling.id).status, "stopped");
+  assert.equal(groups.getJobGroup(group.uid, creatorUserId).outcome, "success");
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
