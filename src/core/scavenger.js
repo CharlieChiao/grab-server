@@ -247,7 +247,7 @@ export function updateScavengeTask(id, userId, input = {}) {
   const maxTotalCost = input.maxTotalCost === undefined ? Number(row.max_total_cost) : Number(input.maxTotalCost);
   if (!Number.isFinite(maxTotalCost) || maxTotalCost <= 0) return { error: "预算必须是正数" };
   const payKind = input.payKind === undefined ? row.pay_kind : String(input.payKind);
-  if (payKind !== "balance-first" && payKind !== "wechat-first") return { error: "支付优先级无效" };
+  if (payKind !== "balance-first" && payKind !== "wechat-first" && payKind !== "timecard-first") return { error: "支付优先级无效" };
   const allowCombine = input.allowCombine === undefined ? !!row.allow_combine : !!input.allowCombine;
   const allowPartial = input.allowPartial === undefined ? !!row.allow_partial : !!input.allowPartial;
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
@@ -318,10 +318,13 @@ async function pollTask(task) {
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "场地不支持查询" }; continue; }
     // 支付优先级: 主支付 + 备选支付(主支付失败如余额不足时, 自动换备选支付重下同一批场次)
-    const wechatFirst = task.payKind === "wechat-first";
+    // timecard-first: 次卡优先(0 元核销), 次卡不足/失败自动换余额
+    const payKind = task.payKind || "balance-first";
+    const timecardFirst = payKind === "timecard-first";
+    const wechatFirst = payKind === "wechat-first";
     const payCodes = {
-      primary: venue.payments?.[wechatFirst ? "wechat" : "balance"],
-      fallback: venue.payments?.[wechatFirst ? "balance" : "wechat"],
+      primary: timecardFirst ? venue.payments?.timecard : venue.payments?.[wechatFirst ? "wechat" : "balance"],
+      fallback: venue.payments?.[timecardFirst ? "balance" : (wechatFirst ? "balance" : "wechat")],
     };
     if (payCodes.primary == null && payCodes.fallback == null) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "不支持任何支付方式" }; continue; }
     const credential = getCredential(venueId, task.userId);
@@ -387,13 +390,27 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
   const totalCost = chain.reduce((sum, x) => sum + x.cost, 0);
   const base = venue.riskProfile || {};
   const profile = { ...base, scopeKey: `${base.scopeKey || venue.meta.id}:${task.userId}` };
+  // 次卡支付: 主支付为次卡时按场次自动选卡注入 venueTimeCardUid(适配器契约); 选不到卡直接走备选支付
+  const timecardCode = venue.payments?.timecard;
+  let primaryCode = payCodes.primary;
+  let timeCardUid = null;
+  if (timecardCode != null && Number(payCodes.primary) === Number(timecardCode) && typeof venue.pickTimeCard === "function") {
+    const hm = (min) => `${String(Math.floor((min % 1440) / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}:00`;
+    const dayOf = (min) => (min >= 1440 ? new Date(Date.parse(task.date + "T00:00:00Z") + 86400000).toISOString().slice(0, 10) : task.date);
+    const items = chain.map((s) => ({ classroomUid: s.uid, beginDatetime: `${dayOf(s.beginMin)} ${hm(s.beginMin)}`, endDatetime: `${dayOf(s.endMin)} ${hm(s.endMin)}` }));
+    try {
+      const card = await venue.pickTimeCard(credential, items);
+      if (card) timeCardUid = card.uidTxt || String(card.uid);
+      else { console.log(`[scavenger] task=${task.id} ${venue.meta.name} 无可用次卡, 跳过次卡直接 ${payCodes.fallback != null ? "余额" : "失败"}`); primaryCode = payCodes.fallback; }
+    } catch (e) { console.warn(`[scavenger] task=${task.id} 次卡查询失败: ${String(e?.message || e)}`); primaryCode = payCodes.fallback; }
+  }
   const buildTarget = (payCode) => ({
     date: task.date,
     courts: chain.map((s) => ({ court: s.court, courtUid: s.uid, time: s.time, cost: s.cost })),
-    ext: { payMethod: payCode, totalCost },
+    ext: { payMethod: payCode, totalCost, ...(timeCardUid && timecardCode != null && Number(payCode) === Number(timecardCode) ? { venueTimeCardUid: timeCardUid } : {}) },
   });
   // 支付语义名(码→balance/wechat), 日志与消息用
-  const payName = (code) => (code != null && code === venue.payments?.balance ? "balance" : code === venue.payments?.wechat ? "wechat" : String(code));
+  const payName = (code) => (code != null && code === venue.payments?.balance ? "balance" : code === venue.payments?.wechat ? "wechat" : code === venue.payments?.timecard ? "timecard" : String(code));
   const dispatch = async (payCode, via) => {
     try {
       return await enqueueBooking(venue.meta.id, profile, async () => {
@@ -402,12 +419,12 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
       });
     } catch (error) { return { success: false, message: String(error?.message || error) }; }
   };
-  let result = await dispatch(payCodes.primary, payName(payCodes.primary));
+  let result = await dispatch(primaryCode, payName(primaryCode));
   let switchedPay = false;
-  // 主支付失败(余额不足等支付侧原因)且备选支付可用 → 自动切换重下(同 slot, 微信锁场等待人工付款)
+  // 主支付失败(余额不足/次卡次数不足等支付侧原因)且备选支付可用 → 自动切换重下(同 slot, 微信锁场等待人工付款)
   const primaryClass = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
   if (result?.success !== true && payCodes.fallback != null && primaryClass !== "rate-limited" && primaryClass !== "success") {
-    console.log(`[scavenger] task=${task.id} ${payName(payCodes.primary)} 下单失败(${String(result?.message || "").slice(0, 60)}), 切换 ${payName(payCodes.fallback)} 重试`);
+    console.log(`[scavenger] task=${task.id} ${payName(primaryCode)} 下单失败(${String(result?.message || "").slice(0, 60)}), 切换 ${payName(payCodes.fallback)} 重试`);
     const retry = await dispatch(payCodes.fallback, payName(payCodes.fallback));
     if (retry?.success === true) {
       switchedPay = true;
@@ -436,7 +453,7 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
   }
   const timeRange = `${chain[0].time}-${String(Math.floor(chain[chain.length - 1].endMin / 60)).padStart(2, "0")}:${String(chain[chain.length - 1].endMin % 60).padStart(2, "0")}`;
   // 实际下单成功的 target(含最终使用的支付码), 供释放检测比对
-  const finalTarget = buildTarget(switchedPay ? payCodes.fallback : payCodes.primary);
+  const finalTarget = buildTarget(switchedPay ? payCodes.fallback : primaryCode);
   const booking = {
     venueId: venue.meta.id, venueName: venue.meta.name,
     courts: chain.map((s) => ({ court: s.court, time: s.time })),

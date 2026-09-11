@@ -96,9 +96,13 @@ router.post("/", (req, res) => {
   const startMin = hhmmToMinutes(startTime), endMin = hhmmToMinutes(endTime);
   if (startMin == null || endMin == null) return res.status(400).json({ error: "时间格式无效(HH:MM)" });
   if (endMin === startMin) return res.status(400).json({ error: "结束时间需晚于开始时间" });
-  // 支付优先级: balance-first(余额优先,不足自动切换微信锁场) / wechat-first; 兼容旧单值 balance/wechat
-  const normalizedPay = payKind === "wechat-first" || payKind === "wechat" ? "wechat-first" : payKind === "balance-first" || payKind === "balance" ? "balance-first" : null;
+  // 支付优先级: timecard-first(次卡优先, 不足自动换余额) / balance-first(余额优先,不足自动切换微信锁场) / wechat-first; 兼容旧单值
+  const normalizedPay = payKind === "wechat-first" || payKind === "wechat" ? "wechat-first" : payKind === "timecard-first" ? "timecard-first" : payKind === "balance-first" || payKind === "balance" ? "balance-first" : null;
   if (!normalizedPay) return res.status(400).json({ error: "支付方式无效" });
+  if (normalizedPay === "timecard-first") {
+    const noTimecard = [...new Set(venueIds)].map((vid) => getVenue(vid)).filter((v) => v && v.payments?.timecard == null);
+    if (noTimecard.length) return res.status(400).json({ error: `以下球场不支持次卡支付: ${noTimecard.map((v) => v.name).join("、")}` });
+  }
   const cost = Number(maxTotalCost);
   if (!Number.isFinite(cost) || cost <= 0) return res.status(400).json({ error: "最高接受价格无效" });
   // 日期窗口: 不早于今天(北京), 最多提前 14 天
@@ -107,8 +111,8 @@ router.post("/", (req, res) => {
   if (diffDays < 0) return res.status(400).json({ error: "日期不能早于今天" });
   if (diffDays > 14) return res.status(400).json({ error: "最多提前 14 天" });
   // 球场校验: 存在 + 支持 listSlots + 至少支持优先级里的一种支付(主支付缺失时用备选)
-  const primaryKind = normalizedPay === "wechat-first" ? "wechat" : "balance";
-  const fallbackKind = normalizedPay === "wechat-first" ? "balance" : "wechat";
+  const primaryKind = normalizedPay === "wechat-first" ? "wechat" : normalizedPay === "timecard-first" ? "timecard" : "balance";
+  const fallbackKind = normalizedPay === "wechat-first" ? "balance" : normalizedPay === "timecard-first" ? "balance" : "wechat";
   const unsupported = [];
   for (const venueId of [...new Set(venueIds)]) {
     const venue = getVenue(venueId);

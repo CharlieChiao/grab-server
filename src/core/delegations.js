@@ -3,7 +3,7 @@ import { db, nowIso } from "./database.js";
 import { paymentKind } from "./payCodes.js";
 
 const INVITE_TTL_MS = 7 * 86400000;
-const PAYMENT_TYPES = new Set(["balance", "wechat"]);
+const PAYMENT_TYPES = new Set(["balance", "wechat", "timecard"]); // timecard=核销授权方场地次卡(0 元), 与余额同属授权方资产
 
 function parsePayments(value) {
   try { return JSON.parse(value || "[]").filter((item) => PAYMENT_TYPES.has(item)); } catch { return []; }

@@ -177,6 +177,18 @@ export function createPospalAdapter(cfg, options = {}) {
     return usable[0] || null;
   }
 
+  // 支付准备契约: 下单前异步注入支付所需字段(次卡 → venueTimeCardUid); 非次卡支付原样透传。
+  // scheduler 在预构建请求前调用; 抛错(无可用卡)按下单失败处理
+  async function prepareTarget(target, cred) {
+    if (B.payMethodTimeCard == null) return target;
+    if (Number(target.ext?.payMethod) !== Number(B.payMethodTimeCard)) return target;
+    if (target.ext.venueTimeCardUid) return target;
+    const items = normalizeItems(target).map((it) => ({ classroomUid: it.uid, beginDatetime: it.begin, endDatetime: it.end }));
+    const card = await pickTimeCard(cred, items);
+    if (!card) throw new Error("没有可用的场地次卡(次数不足或已过期)");
+    return { ...target, ext: { ...target.ext, venueTimeCardUid: card.uidTxt || String(card.uid) } };
+  }
+
   // 取消预约(整单取消全部场次)
   async function cancelBooking(cred, apptUid) {
     const { json } = await post("/wxapi/AppointmentVenue/CancelVenueApptAllItem", cred, { apptUid: String(apptUid), userId: B.storeId });
@@ -367,5 +379,5 @@ export function createPospalAdapter(cfg, options = {}) {
     }
   }
 
-  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, loadTimeCards, pickTimeCard, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance, timecard: B.payMethodTimeCard != null ? B.payMethodTimeCard : null } };
+  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, prepareTarget, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, loadTimeCards, pickTimeCard, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance, timecard: B.payMethodTimeCard != null ? B.payMethodTimeCard : null } };
 }

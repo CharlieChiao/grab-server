@@ -18,6 +18,10 @@
  *        listMyBookings(cred)→[{uid,amount,items[{court,begin,end,cost}],payments,...}] 已约场地列表(归一化)
  *        cancelBooking(cred,apptUid)→{ok,error?} 取消预约(整单取消全部场次)
  *        —— 预约管理契约: 供小程序查看/取消本人在场馆的订单; 不支持的球场 API 返回 501
+ *        payments{...,timecard} 次卡支付码(null=不支持); prepareTarget(target,cred)→target 支付准备契约:
+ *        下单前异步注入支付所需字段(次卡 → venueTimeCardUid, 银豹在 pickTimeCard 中自动选卡)。
+ *        上层(scheduler 预构建前 / 任何下单前)调用, 未实现的适配器原样透传; 抛错按下单失败处理。
+ *        —— 新球场接入次卡类支付只需实现 payments.timecard + prepareTarget, 上层逻辑零改动
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];

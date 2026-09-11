@@ -123,7 +123,11 @@ async function runGrab(job, credentialArg, venueArg) {
   const releaseMaxAttempts = Math.max(1, Number(retryPolicy.maxAttempts || maxAttempts));
   let releasePending = false;
   let prebuilt = null;
-  try { if (typeof venue.buildGrabRequest === "function") prebuilt = venue.buildGrabRequest(job.target, credential); }
+  try {
+    // 支付准备契约: 下单前异步注入支付所需字段(次卡 venueTimeCardUid 等), 未实现的适配器原样透传
+    const preparedTarget = typeof venue.prepareTarget === "function" ? await venue.prepareTarget(job.target, credential) : job.target;
+    if (typeof venue.buildGrabRequest === "function") prebuilt = venue.buildGrabRequest(preparedTarget, credential);
+  }
   catch (e) { updateJob(job.id, { status: "failed", result: { message: e.message } }); scheduled.delete(job.id); return; }
   updateJob(job.id, { status: "running", result: { message: "dispatching", plannedAt: job.fireAt } });
   const startedMs = Date.now();
