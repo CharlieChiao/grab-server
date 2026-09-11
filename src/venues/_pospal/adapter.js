@@ -167,6 +167,16 @@ export function createPospalAdapter(cfg, options = {}) {
     }));
   }
 
+  // 按场次查可用次卡并自动选卡(次数刚够的优先用完, 同数取最早过期), 下单前由上层调用注入 ext.venueTimeCardUid
+  async function pickTimeCard(cred, classroomItems) {
+    const { json } = await post("/wxapi/AppointmentVenue/LoadCustomerVenueTimeCards", cred, { userId: B.storeId, classroomItems });
+    const cards = (json && json.result) || [];
+    const need = Math.max(1, (classroomItems || []).length);
+    const usable = cards.filter((c) => c.status === 1 && Number(c.times) >= need);
+    usable.sort((a, b) => (Number(a.times) - Number(b.times)) || (String(a.avaliableEndTime).localeCompare(String(b.avaliableEndTime))));
+    return usable[0] || null;
+  }
+
   // 取消预约(整单取消全部场次)
   async function cancelBooking(cred, apptUid) {
     const { json } = await post("/wxapi/AppointmentVenue/CancelVenueApptAllItem", cred, { apptUid: String(apptUid), userId: B.storeId });
@@ -217,6 +227,10 @@ export function createPospalAdapter(cfg, options = {}) {
       ? explicitTotal
       : items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
     const payMethod = (target.ext && target.ext.payMethod) || B.payMethodBalance;
+    // 次卡支付: 官方小程序形态 paymentMethod+venueTimeCardUid(金额 0, combinationPayments 为空);
+    // 其余支付(余额/微信)走 combinationPayments 明细
+    const useTimeCard = B.payMethodTimeCard != null && Number(payMethod) === Number(B.payMethodTimeCard);
+    if (useTimeCard && !(target.ext && target.ext.venueTimeCardUid)) throw new Error("次卡支付缺少 venueTimeCardUid");
     const payload = {
       userId: B.storeId,
       projectType: (target.ext && target.ext.projectType) || 0,
@@ -227,7 +241,9 @@ export function createPospalAdapter(cfg, options = {}) {
         peopleNum: 1,
       })),
       remark: "",
-      combinationPayments: [{ paymentMethod: payMethod, cost: totalCost }],
+      ...(useTimeCard
+        ? { paymentMethod: B.payMethodTimeCard, venueTimeCardUid: String(target.ext.venueTimeCardUid), combinationPayments: [] }
+        : { combinationPayments: [{ paymentMethod: payMethod, cost: totalCost }] }),
     };
     return {
       path: "/wxapi/AppointmentVenue/SaveVenueAppointmentV2",
@@ -351,5 +367,5 @@ export function createPospalAdapter(cfg, options = {}) {
     }
   }
 
-  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };
+  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, loadTimeCards, pickTimeCard, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance, timecard: B.payMethodTimeCard != null ? B.payMethodTimeCard : null } };
 }
