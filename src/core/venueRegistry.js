@@ -15,6 +15,9 @@
  *        返回该类型场地的 uid 列表; 不支持该类型返回 null(前端变灰, 捡漏任务不可选该球场)。
  *        未显式实现的适配器由 registry 从 meta.courts[{type,uid}] 自动派生; courts 未声明则不支持任何类型。
  *        新增场地类型须先在 core/courtTypes.js 的注册表登记。
+ *        listMyBookings(cred)→[{uid,amount,items[{court,begin,end,cost}],payments,...}] 已约场地列表(归一化)
+ *        cancelBooking(cred,apptUid)→{ok,error?} 取消预约(整单取消全部场次)
+ *        —— 预约管理契约: 供小程序查看/取消本人在场馆的订单; 不支持的球场 API 返回 501
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];

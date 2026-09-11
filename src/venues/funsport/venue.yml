@@ -7,6 +7,8 @@ backend:
   projectUid: '1768357901249380361'
   payMethodBalance: 40
   payMethodWechat: 900
+  # 场地次卡支付码(核销时段卡, 下单金额 0, 支付记录带 venueTimeCardUid); 下单请求体写法待抓包确认后接入
+  payMethodTimeCard: 220
 # 放场规则: 2026-09-07 实测日历放场为提前 1 天(用户校准), 原按 2 天推算导致超宽限窗口
 advanceDays:
   tennis: 2

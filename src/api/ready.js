@@ -108,6 +108,31 @@ router.get("/venues/:id/reference-price", async (req, res) => {
     res.status(502).json({ error: "查询参考价格失败", detail: String(error.message || error) });
   }
 });
+// 已约场地列表(预约管理契约)
+router.get("/venues/:id/bookings", async (req, res) => {
+  const venue = getVenue(req.params.id);
+  if (!venue) return res.status(404).json({ error: "not found" });
+  if (typeof venue.listMyBookings !== "function") return res.status(501).json({ error: "该球场不支持查询预约" });
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
+  try {
+    const bookings = await venue.listMyBookings(getCredential(req.params.id, ownerUserId));
+    res.json({ ok: true, bookings });
+  } catch (error) { res.status(502).json({ error: "查询预约失败", detail: String(error.message || error) }); }
+});
+// 取消预约(整单取消全部场次)
+router.post("/venues/:id/bookings/:uid/cancel", async (req, res) => {
+  const venue = getVenue(req.params.id);
+  if (!venue) return res.status(404).json({ error: "not found" });
+  if (typeof venue.cancelBooking !== "function") return res.status(501).json({ error: "该球场不支持取消预约" });
+  const ownerUserId = credentialOwner(req);
+  if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
+  try {
+    const result = await venue.cancelBooking(getCredential(req.params.id, ownerUserId), req.params.uid);
+    if (result?.ok !== true) return res.status(400).json({ error: result?.error || "取消失败" });
+    res.json({ ok: true });
+  } catch (error) { res.status(502).json({ error: "取消预约失败", detail: String(error.message || error) }); }
+});
 router.get("/venues/:id/slots", async (req, res) => {
   const venue = getVenue(req.params.id);
   const date = String(req.query.date || "").trim();

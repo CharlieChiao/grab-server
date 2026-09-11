@@ -149,6 +149,31 @@ export function createPospalAdapter(cfg, options = {}) {
     return (json && json.result) || [];
   }
 
+  // 已约场地列表(归一化: 预约 uid/总额/支付明细/场次/创建时间)
+  async function listMyBookings(cred) {
+    const { json } = await post("/wxapi/AppointmentVenue/LoadVenueAppts", cred, { pageSize: 20, apptStatusType: 1, beginRow: 0, includeAllUserId: true, userIds: [] });
+    const appts = (json && json.result && json.result.venueAppts) || [];
+    return appts.map((a) => ({
+      uid: a.txtUid || String(a.uid),
+      amount: Number(a.appointAmount) || 0,
+      payStatus: a.payStatus, status: a.status,
+      createdAt: a.createdDatetime,
+      payments: (a.apptPayments || []).map((p) => ({ code: p.payMethodCode, name: p.payMethodName || "", amount: Number(p.amount) || 0, timeCardUid: p.venueTimeCardUid ? String(p.venueTimeCardUid) : null })),
+      items: (a.apptClassroomItems || []).map((it) => ({
+        court: it.classroomName || (it.serviceClassroom || {}).name || "",
+        begin: it.beginDatetime, end: it.endDatetime,
+        cost: Number(it.totalCost) || 0,
+      })),
+    }));
+  }
+
+  // 取消预约(整单取消全部场次)
+  async function cancelBooking(cred, apptUid) {
+    const { json } = await post("/wxapi/AppointmentVenue/CancelVenueApptAllItem", cred, { apptUid: String(apptUid), userId: B.storeId });
+    if (json && json.successed) return { ok: true };
+    return { ok: false, error: (json && (json.message || JSON.stringify(json.messages))) || "取消失败" };
+  }
+
   async function preheat(cred) {
     if (!cred || !cred.PSPLVISITORID) return { ok: false, detail: "缺少 PSPLVISITORID" };
     try {
@@ -326,5 +351,5 @@ export function createPospalAdapter(cfg, options = {}) {
     }
   }
 
-  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };
+  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };
 }
