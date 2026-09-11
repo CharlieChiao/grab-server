@@ -115,10 +115,24 @@ export function createPospalAdapter(cfg, options = {}) {
         });
         last = json;
         if (json && json.isLogin) {
+          const extra = { balance: json.balance, uid: json.uid };
+          // 次卡(时段卡)余额: 与登录校验并行不阻塞, 失败静默(卡券信息缺失不影响凭证有效性判定)
+          try {
+            const cards = await loadTimeCards(cred);
+            const active = cards.filter((c) => c.status === 1 && Number(c.times) > 0);
+            if (active.length) {
+              const totalTimes = active.reduce((s, c) => s + (Number(c.times) || 0), 0);
+              extra.timeCards = active.map((c) => ({ uid: c.uidTxt || String(c.uid), number: c.number, times: Number(c.times) || 0, validUntil: c.avaliableEndTime }));
+              extra.timeCardTimes = totalTimes;
+            }
+          } catch {}
+          const balanceParts = [];
+          if (Number.isFinite(Number(json.balance))) balanceParts.push(`余额 ¥${json.balance}`);
+          if (extra.timeCardTimes) balanceParts.push(`次卡 ${extra.timeCardTimes} 次`);
           return {
             ok: true,
-            detail: "已登录",
-            extra: { balance: json.balance, uid: json.uid },
+            detail: balanceParts.join(" · ") || "已登录",
+            extra,
           };
         }
       } catch (e) {
@@ -127,6 +141,12 @@ export function createPospalAdapter(cfg, options = {}) {
       await new Promise((r) => setTimeout(r, 500));
     }
     return { ok: false, detail: "登录状态无效，PSPLVISITORID 可能已过期，需要重新抓取", extra: last || {} };
+  }
+
+  // 次卡(时段卡)查询: /wxapi/VenueTimeCard/LoadCustomerVenueTimeCard, 空 body 仅凭 PSPLVISITORID
+  async function loadTimeCards(cred) {
+    const { json } = await post("/wxapi/VenueTimeCard/LoadCustomerVenueTimeCard", cred, {});
+    return (json && json.result) || [];
   }
 
   async function preheat(cred) {
