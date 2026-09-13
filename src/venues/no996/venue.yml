@@ -1,0 +1,58 @@
+id: no996
+name: No996 网球-前海店
+desc: 爱拍客(aipaike)平台, 4 片网球场, 微信支付锁场
+backend:
+  base: https://api.aipaike111.com
+  storeId: 3d18084c-7e75-42c2-aba1-949a38b47c23
+# 可订窗口 windowDays=6(会员 7); 放场规则按日历窗口推算, 待实测校准
+advanceDays:
+  tennis: 6
+bookableDays: 6
+release:
+  timezone: Asia/Shanghai
+  rules:
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 5
+      at: '00:00:00.000'
+bookingHours:
+  start: '16:30'
+  end: '24:00'
+  slotMinutes: 30
+refundPolicy:
+  nonRefundableHours: 24
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 2000
+  maxAttempts: 6
+courts:
+  - name: 1号训练场
+    type: tennis
+    uid: 9d61948d-5551-4ba1-8224-4c8d897ab721
+  - name: 2号训练场
+    type: tennis
+    uid: aa29ae00-4b1f-423e-8094-e0b50e8c81c9
+  - name: 3号训练场
+    type: tennis
+    uid: 0802e339-94da-4b19-95b3-0414210fce5c
+  - name: 4号训练场
+    type: tennis
+    uid: 773d0044-d896-4b81-92f9-b95dc80b4aa1
+credentialSchema:
+  - key: Authorization
+    label: 登录令牌
+    desc: 从微信小程序抓包获取(Authorization: Bearer JWT)；ready 检测即验证其有效性。
+capture:
+  enabled: true
+  hosts:
+    - api.aipaike111.com
+  paths:
+    - '/api/v1/*'
+  headers:
+    - Authorization
+  tasks:
+    - id: identity
+      label: 身份凭证
+      source: credential
+      required: true
+      maxAgeHours: 720
