@@ -6,7 +6,8 @@ backend:
   storeId: 3d18084c-7e75-42c2-aba1-949a38b47c23
   # 平台要求的活跃 club 头(缺省报 MISSING_ACTIVE_CLUB); 跨店接入时按各店所属 club 配置
   clubId: 404a12d9-48a9-4bba-abe4-9cdf17909bc8
-# 可订窗口 windowDays=6(会员 7); 放场规则按日历窗口推算, 待实测校准
+# 可订窗口 windowDays=6(会员 7); 已实测(2026-09-13): 全时段 07:00-24:00, 当天时段从当前时刻起过滤
+# 放场规则: 1/2/4号场 6 天窗口内全可订; 3号场 18:00-22:00 为滚动放场(各时段开始前 12 小时逐一放出, 见接口 meta.leadNotices)
 advanceDays:
   tennis: 6
 bookableDays: 6
@@ -18,7 +19,7 @@ release:
       calendarDaysBefore: 5
       at: '00:00:00.000'
 bookingHours:
-  start: '16:30'
+  start: '07:00'
   end: '24:00'
   slotMinutes: 30
 refundPolicy:
