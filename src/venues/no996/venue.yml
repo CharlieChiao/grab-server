@@ -41,7 +41,7 @@ courts:
 credentialSchema:
   - key: Authorization
     label: 登录令牌
-    desc: 从微信小程序抓包获取(Authorization: Bearer JWT)；ready 检测即验证其有效性。
+    desc: '从微信小程序抓包获取(Authorization: Bearer JWT)；ready 检测即验证其有效性。'
 capture:
   enabled: true
   hosts:
