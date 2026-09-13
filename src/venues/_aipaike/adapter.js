@@ -28,6 +28,8 @@ export function createAipaikeAdapter(cfg) {
     const token = String(cred?.Authorization || "");
     return {
       Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,
+      "X-Active-Store-Id": String(B.storeId),
+      ...(B.clubId ? { "X-Active-Club-Id": String(B.clubId) } : {}), // 平台必带头(缺省报 MISSING_ACTIVE_CLUB)
       "Content-Type": "application/json",
       Accept: "*/*",
       "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50",

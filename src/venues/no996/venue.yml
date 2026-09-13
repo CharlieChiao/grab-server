@@ -4,6 +4,8 @@ desc: 爱拍客(aipaike)平台, 4 片网球场, 微信支付锁场
 backend:
   base: https://api.aipaike111.com
   storeId: 3d18084c-7e75-42c2-aba1-949a38b47c23
+  # 平台要求的活跃 club 头(缺省报 MISSING_ACTIVE_CLUB); 跨店接入时按各店所属 club 配置
+  clubId: 404a12d9-48a9-4bba-abe4-9cdf17909bc8
 # 可订窗口 windowDays=6(会员 7); 放场规则按日历窗口推算, 待实测校准
 advanceDays:
   tennis: 6
