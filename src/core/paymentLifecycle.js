@@ -48,25 +48,37 @@ function formatWait(ms) {
   return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
 }
 
-// 单次余额下单尝试; sinceMs 用于输出从触发到请求实际发出的延迟(含限流排队时间)
+// 兜底下单尝试: 次卡优先(0 元核销, 经适配器 prepareTarget 契约注入卡 uid) → 余额。
+// 泛思博特等已禁余额订场的球场靠次卡兜底; 次卡不足/无卡自动落到余额, 全失败返回最后一次结果。
 // 限流按下单用户分 scope: B 与 A 是不同凭证用户, 理论上银豹按用户限流, 不应互相排队(@todo 若实测触发"操作太频繁"说明按 IP 限流, 需回退为共享 scope)
-async function attemptBalanceBooking(venue, job, credential, via, sinceMs) {
-  try {
-    const balanceCode = venue.payments?.balance ?? 40; // 兜底下单改用本场声明的余额支付码
-    const target = { ...job.target, ext: { ...job.target.ext, payMethod: balanceCode } };
-    const baseProfile = venue.riskProfile || {};
-    const userId = via === "owner" ? job.userId : job.createdByUserId;
-    const profile = { ...baseProfile, scopeKey: `${baseProfile.scopeKey || job.venueId}:${userId}` };
-    const result = await enqueueBooking(job.venueId, profile, async () => {
-      console.log(`[fallback] job=${job.id} via=${via} dispatched delayFromTrigger=${Date.now() - sinceMs}ms`);
-      return venue.grab(target, credential);
-    });
-    console.log(`[fallback] job=${job.id} via=${via} result=${result?.success ? "ok" : "fail"} ${String(result?.message || "").slice(0, 80)}`);
-    return result;
-  } catch (error) {
-    console.warn(`[fallback] job=${job.id} via=${via} error ${String(error?.message || error)}`);
-    return { success: false, message: String(error?.message || error) };
+async function attemptBalanceBooking(venue, job, credential, via, sinceMs, allowedPayments = null) {
+  const tries = [];
+  if (venue.payments?.timecard != null && (!allowedPayments || allowedPayments.includes("timecard"))) tries.push({ code: venue.payments.timecard, name: "次卡" });
+  if (venue.payments?.balance != null && (!allowedPayments || allowedPayments.includes("balance"))) tries.push({ code: venue.payments.balance, name: "余额" });
+  if (!tries.length) return { success: false, message: "该球场无可用兜底支付(次卡/余额)" };
+  let last = null;
+  for (const t of tries) {
+    try {
+      let target = { ...job.target, ext: { ...job.target.ext, payMethod: t.code } };
+      if (t.code === venue.payments.timecard && typeof venue.prepareTarget === "function") {
+        target = await venue.prepareTarget(target, credential); // 无可用次卡时抛错 → 落到余额
+      }
+      const baseProfile = venue.riskProfile || {};
+      const userId = via === "owner" ? job.userId : job.createdByUserId;
+      const profile = { ...baseProfile, scopeKey: `${baseProfile.scopeKey || job.venueId}:${userId}` };
+      const result = await enqueueBooking(job.venueId, profile, async () => {
+        console.log(`[fallback] job=${job.id} via=${via} pay=${t.name} dispatched delayFromTrigger=${Date.now() - sinceMs}ms`);
+        return venue.grab(target, credential);
+      });
+      console.log(`[fallback] job=${job.id} via=${via} pay=${t.name} result=${result?.success ? "ok" : "fail"} ${String(result?.message || "").slice(0, 80)}`);
+      if (result?.success === true) return result;
+      last = result;
+    } catch (error) {
+      console.warn(`[fallback] job=${job.id} via=${via} pay=${t.name} error ${String(error?.message || error)}`);
+      last = { success: false, message: String(error?.message || error) };
+    }
   }
+  return last;
 }
 
 // 余额支付抢订失败时(如授权方余额不足), 用创建任务者(A)本人凭证余额兜底下单
@@ -88,15 +100,16 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
     const delegation = getActiveDelegation(job.userId, job.createdByUserId);
     let allowed = [];
     try { allowed = JSON.parse(delegation?.allowed_payments_json || "[]"); } catch {}
+    const anyFallbackPay = (venue.payments?.timecard != null && allowed.includes("timecard")) || (venue.payments?.balance != null && allowed.includes("balance"));
     if (!delegation) ownerResult = { success: false, message: "授权已失效" };
-    else if (!allowed.includes("balance")) ownerResult = { success: false, message: "授权方未允许余额支付" };
+    else if (!anyFallbackPay) ownerResult = { success: false, message: "授权方未允许余额/次卡兜底支付" };
     else {
       const credential = getCredential(job.venueId, job.userId);
-      ownerResult = credential ? await attemptBalanceBooking(venue, job, credential, "owner", now) : { success: false, message: "授权方未配置场馆凭证" };
+      ownerResult = credential ? await attemptBalanceBooking(venue, job, credential, "owner", now, allowed) : { success: false, message: "授权方未配置场馆凭证" };
     }
   }
   let result = ownerResult;
-  let message = `${baseMessage}，已自动用授权方余额支付兜底成功`;
+  let message = `${baseMessage}，已自动用授权方账户兜底成功(次卡/余额)`;
   let fallbackBy = "owner";
   if (ownerResult?.success !== true) {
     // 第二层: 用创建任务者(A)本人的凭证和余额下单, 花的是 A 自己的钱, 无需 B 的授权
@@ -106,10 +119,10 @@ export async function fallbackBalanceBooking(job, baseMessage, now) {
       const ownResult = ownCredential ? await attemptBalanceBooking(venue, job, ownCredential, "creator", now) : { success: false, message: "本人未配置该场馆凭证" };
       result = ownResult;
       if (ownResult?.success === true) {
-        message = `${baseMessage}，授权方余额支付未成功（${ownerResult.message}），已改用本人余额支付兜底成功`;
+        message = `${baseMessage}，授权方兜底未成功（${ownerResult.message}），已改用本人账户兜底成功(次卡/余额)`;
         fallbackBy = "creator";
       } else {
-        message = `${baseMessage}，余额兜底未成功: ${ownerResult.message}；本人兜底: ${ownResult.message}`;
+        message = `${baseMessage}，兜底未成功: ${ownerResult.message}；本人兜底: ${ownResult.message}`;
         fallbackBy = "none";
       }
     }
