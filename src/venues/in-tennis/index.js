@@ -66,8 +66,19 @@ const riskProfile = {
 
 async function ready(cred) {
   const { status, json } = await get("/api/user", cred);
-  if (status === 200 && json?.status === 200) return { ok: true, detail: "已登录" };
-  return { ok: false, detail: (json && json.msg) || `HTTP ${status}` };
+  if (status !== 200 || json?.status !== 200) return { ok: false, detail: (json && json.msg) || `HTTP ${status}` };
+  // JWT 到期预警: 无 refresh 端点(已实测 404), 7 天硬过期, 剩 2 天内提醒重新抓包
+  let detail = "已登录";
+  try {
+    const payload = JSON.parse(Buffer.from(String(cred["Authori-zation"]).replace(/^Bearer\s+/i, "").split(".")[1], "base64").toString("utf8"));
+    const remainDays = (Number(payload.exp) * 1000 - Date.now()) / 86400000;
+    if (Number.isFinite(remainDays)) {
+      if (remainDays <= 0) return { ok: false, detail: "凭证已到期, 请重新抓取" };
+      if (remainDays < 2) detail = `已登录 · 凭证 ${remainDays < 1 ? "不足 1 天" : Math.floor(remainDays) + " 天"}后到期, 请尽快更新`;
+      else detail = `已登录 · 凭证剩余 ${Math.floor(remainDays)} 天`;
+    }
+  } catch {}
+  return { ok: true, detail };
 }
 
 // CRMEB date_list: data.children[](时段 timeKey/time) × children[](场地 space_id/price/active)
