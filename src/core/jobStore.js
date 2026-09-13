@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
+import { getVenue } from "./venueRegistry.js";
 
 function rowToJob(row) {
   if (!row) return null;
@@ -60,11 +61,18 @@ export function archiveJob(id) {
   } catch (error) { try { db.exec("ROLLBACK"); } catch {} throw error; }
 }
 // 编辑待执行任务的开抢时间/价格/任务组/兜底开关(仅 pending 状态, 场地/时段变更需重建任务)
-export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance } = {}) {
+export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance, payMethod } = {}) {
   const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
   if (!row) return { error: "not found" };
   if (row.status !== "pending") return { error: "仅待执行任务可编辑" };
   const target = JSON.parse(row.target_json);
+  if (payMethod !== undefined && payMethod !== null) {
+    // 支付码必须是本场适配器 payments 声明的合法码(委托授权的允许范围由 API 层校验)
+    const venue = getVenue(row.venue_id);
+    const payments = venue?.payments || {};
+    if (!Object.values(payments).some((code) => String(code) === String(payMethod))) return { error: "该球场不支持此支付方式" };
+    target.ext = { ...(target.ext || {}), payMethod: isNaN(Number(payMethod)) ? payMethod : Number(payMethod) };
+  }
   if (cost !== undefined && cost !== null) {
     const costNum = Number(cost);
     if (!Number.isFinite(costNum) || costNum <= 0) return { error: "价格必须是正数" };

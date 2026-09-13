@@ -159,8 +159,18 @@ router.post("/:id/payment-confirmed", (req, res) => {
   res.json({ ok: true, job: presentJob(completed, req.user.id) });
 });
 router.put("/:id", (req, res) => {
-  const { fireAt, cost, groupUid, fallbackBalance } = req.body || {};
-  const result = editJob(req.params.id, req.user.id, { fireAt, cost, groupUid, fallbackBalance });
+  const { fireAt, cost, groupUid, fallbackBalance, payMethod } = req.body || {};
+  // 委托任务改支付方式: 新支付方式必须在授权允许范围内(与创建时同规则)
+  if (payMethod != null) {
+    const job = getJob(req.params.id, req.user.id);
+    if (job?.delegated) {
+      const paymentType = paymentTypeFromCode(job.venueId, payMethod);
+      let allowedPayments = [];
+      try { const d = getActiveDelegation(job.userId, job.createdByUserId); allowedPayments = JSON.parse(d?.allowed_payments_json || "[]"); } catch {}
+      if (!paymentType || !allowedPayments.includes(paymentType)) return res.status(403).json({ error: "授权方未允许该支付方式" });
+    }
+  }
+  const result = editJob(req.params.id, req.user.id, { fireAt, cost, groupUid, fallbackBalance, payMethod });
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true, job: presentJob(result.job, req.user.id) });
 });
