@@ -20,7 +20,11 @@ migrateLegacy();
 export function getCredential(venueId, userId = "legacy-owner") {
   const row = db.prepare("SELECT credential_json FROM credentials WHERE user_id=? AND venue_id=?").get(userId, venueId);
   if (!row) return null;
-  try { return JSON.parse(row.credential_json); } catch { return null; }
+  try {
+    const cred = JSON.parse(row.credential_json);
+    // 附加内部元数据(下划线前缀, 不入 credentialSchema): 供适配器在凭证自动续期后回写(如 aipaike refresh token 轮换)
+    return { ...cred, _userId: userId, _venueId: venueId };
+  } catch { return null; }
 }
 export function setCredential(venueId, cred, userId = "legacy-owner") {
   const now = nowIso();

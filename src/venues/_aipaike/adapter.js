@@ -10,6 +10,7 @@
  *   GET  /membership/summary                        会员/余额
  */
 import { Pool } from "undici";
+import { setCredential } from "../../core/credentialStore.js";
 
 export function createAipaikeAdapter(cfg) {
   const B = cfg.backend;
@@ -36,22 +37,59 @@ export function createAipaikeAdapter(cfg) {
     };
   }
 
-  async function request(method, path_, cred, payload, timeoutMs = 12000) {
+  async function request(method, path_, cred, payload, timeoutMs = 12000, isRetry = false) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let statusCode, text;
     try {
-      const { statusCode, body } = await pool.request({
-        method,
-        path: path_,
-        headers: headers(cred),
-        body: payload === undefined ? undefined : JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-      const text = await body.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch {}
-      return { status: statusCode, json };
+      const r = await pool.request({ method, path: path_, headers: headers(cred), body: payload === undefined ? undefined : JSON.stringify(payload), signal: ctrl.signal });
+      statusCode = r.statusCode;
+      text = await r.body.text();
     } finally { clearTimeout(timer); }
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    // access token 过期(401/UNAUTHORIZED): 用 refreshToken 自动续期(轮换), 回写凭证库后重试一次
+    if (statusCode === 401 && !isRetry && cred?.refreshToken && !path_.includes("/auth/refresh")) {
+      const refreshed = await tryRefresh(cred);
+      if (refreshed) return request(method, path_, refreshed, payload, timeoutMs, true);
+    }
+    return { status: statusCode, json };
+  }
+
+  // 单飞刷新: 并发 401 只触发一次 refresh; 响应 {token(2h), refreshToken(7d, 轮换)}
+  let refreshing = null;
+  async function tryRefresh(cred) {
+    if (!refreshing) {
+      refreshing = (async () => {
+        try {
+          const r = await fetch(B.base + "/api/v1/auth/refresh", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Active-Store-Id": String(B.storeId),
+              ...(B.clubId ? { "X-Active-Club-Id": String(B.clubId) } : {}),
+            },
+            body: JSON.stringify({ refreshToken: cred.refreshToken }),
+          });
+          const j = await r.json().catch(() => null);
+          if (r.status !== 200 || j?.code !== 0 || !j.data?.token) return null;
+          const next = { ...cred, Authorization: `Bearer ${j.data.token}`, refreshToken: j.data.refreshToken || cred.refreshToken };
+          // 回写凭证库(滚动保存轮换后的 refresh token); 元数据字段不落库
+          if (cred._venueId && cred._userId) {
+            const { _venueId, _userId, ...persist } = next;
+            setCredential(_venueId, persist, _userId);
+          }
+          console.log(`[aipaike:${cfg.id}] token auto-refreshed (access 2h, refresh token rotated)`);
+          return next;
+        } catch (e) {
+          console.warn(`[aipaike:${cfg.id}] refresh failed: ${String(e?.message || e)}`);
+          return null;
+        } finally {
+          setTimeout(() => { refreshing = null; }, 50);
+        }
+      })();
+    }
+    return refreshing;
   }
   const post = (p, cred, payload, t) => request("POST", p, cred, payload, t);
   const get = (p, cred, t) => request("GET", p, cred, undefined, t);
