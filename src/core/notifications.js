@@ -47,7 +47,11 @@ export async function notifyJobResult(job) {
   const time = String(first.time || target.time || "").slice(0, 5);
   const activity = [venue, court, time].filter(Boolean).join(" ").slice(0, 20) || "\u7403\u573a\u9884\u7ea6";
   const delegatedWechat = paymentKind(job.venueId, target.ext?.payMethod) === "wechat"; // 微信支付任务无论委托与否, 成功即"待本人付款"
-  const outcome = job.status === "done" ? (delegatedWechat ? "待本人付款" : "\u9884\u7ea6\u6210\u529f") : "\u9884\u7ea6\u5931\u8d25";
+  // phrase 字段限 5 个汉字: 任务组任一成功后兄弟任务自动停止(stopped)不能误报为失败
+  const outcome = job.status === "done" ? (delegatedWechat ? "待本人付款" : "\u9884\u7ea6\u6210\u529f")
+    : job.status === "stopped" ? "已自动停止"
+    : job.status === "awaiting_payment" ? "待本人付款"
+    : "\u9884\u7ea6\u5931\u8d25";
   const amount = Number(target.ext?.totalCost || target.cost || first.cost || 0);
   const body = { touser: decryptOpenId(row.openid_ciphertext), template_id: TEMPLATE_ID, page: "pages/jobs/index", data: {
     thing2: { value: activity },
