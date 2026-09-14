@@ -41,9 +41,28 @@ function schedulePreciseFire(job, fireMs) {
   const venue = getVenue(job.venueId);
   if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
   const credential = getCredential(job.venueId, job.userId);
-  setTimeout(async () => { try { if (typeof venue.preheat === "function") await venue.preheat(credential); } catch (e) { console.warn("[preheat]", e.message); } }, Math.max(0, fireMs - PREHEAT_MS - Date.now()));
-  setTimeout(() => runGrab(job, credential, venue).catch((e) => console.error("[grab]", e)), Math.max(0, fireMs - Date.now()));
+  let preparedTargetPromise = null;
+  setTimeout(async () => {
+    // 次卡选择本身需要一次网络查询；和连接预热一起提前完成，避免到点后才查卡拖慢首发。
+    if (typeof venue.prepareTarget === "function") {
+      preparedTargetPromise = prepareBookingTarget(venue, job.target, credential).catch((e) => {
+        console.warn(`[preheat] job=${job.id} payment preparation failed: ${e.message}`);
+        return null; // 到点时再试一次，避免短暂查询失败直接终止任务
+      });
+    }
+    try {
+      const tasks = [];
+      if (typeof venue.preheat === "function") tasks.push(venue.preheat(credential));
+      if (preparedTargetPromise) tasks.push(preparedTargetPromise);
+      await Promise.all(tasks);
+    } catch (e) { console.warn("[preheat]", e.message); }
+  }, Math.max(0, fireMs - PREHEAT_MS - Date.now()));
+  setTimeout(() => runGrab(job, credential, venue, preparedTargetPromise).catch((e) => console.error("[grab]", e)), Math.max(0, fireMs - Date.now()));
   console.log(`[schedule] job=${job.id} fireAt=${new Date(fireMs).toISOString()}`);
+}
+
+export async function prepareBookingTarget(venue, target, credential) {
+  return typeof venue?.prepareTarget === "function" ? venue.prepareTarget(target, credential) : target;
 }
 
 export function unavailableReasonFromSlots(target, slots) {
@@ -108,7 +127,7 @@ async function watchSlotRelease(venue, job, credential, cfg) {
   return false;
 }
 
-async function runGrab(job, credentialArg, venueArg) {
+async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = null) {
   const venue = venueArg || getVenue(job.venueId);
   if (!venue) { updateJob(job.id, { status: "failed", result: { message: `unknown venue: ${job.venueId}` } }); scheduled.delete(job.id); return; }
   const credential = credentialArg || getCredential(job.venueId, job.userId);
@@ -125,7 +144,8 @@ async function runGrab(job, credentialArg, venueArg) {
   let prebuilt = null;
   try {
     // 支付准备契约: 下单前异步注入支付所需字段(次卡 venueTimeCardUid 等), 未实现的适配器原样透传
-    const preparedTarget = typeof venue.prepareTarget === "function" ? await venue.prepareTarget(job.target, credential) : job.target;
+    const preheatedTarget = preparedTargetPromiseArg ? await preparedTargetPromiseArg : null;
+    const preparedTarget = preheatedTarget || await prepareBookingTarget(venue, job.target, credential);
     if (typeof venue.buildGrabRequest === "function") prebuilt = venue.buildGrabRequest(preparedTarget, credential);
   }
   catch (e) { updateJob(job.id, { status: "failed", result: { message: e.message } }); scheduled.delete(job.id); return; }
@@ -203,11 +223,13 @@ async function runGrab(job, credentialArg, venueArg) {
         let altResult = null;
         let altDispatchedMs = null;
         try {
+          // 备选场次也必须重新执行支付准备；次卡是否可用取决于具体场地和时段。
+          const preparedAltTarget = await prepareBookingTarget(venue, altTarget, credential);
           const limiterProfile = { ...adapterProfile, scopeKey: `${adapterProfile.scopeKey || job.venueId}:${job.userId}` };
           altResult = await enqueueBooking(job.venueId, limiterProfile, async () => {
             altDispatchedMs = Date.now();
             console.log(`[dispatch] job=${job.id} alternate=${i + 1}/${alternates.length} at=${new Date(altDispatchedMs).toISOString()}`);
-            return venue.grab(altTarget, credential);
+            return venue.grab(preparedAltTarget, credential);
           }, { priority: "high" });
         } catch (e) { altResult = { success: false, message: String(e.message || e) }; }
         const altClass = altResult?.success === true ? "success" : "alternate-failed";

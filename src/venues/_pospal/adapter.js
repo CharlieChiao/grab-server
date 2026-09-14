@@ -261,6 +261,7 @@ export function createPospalAdapter(cfg, options = {}) {
       path: "/wxapi/AppointmentVenue/SaveVenueAppointmentV2",
       headers: headers(cred),
       body: JSON.stringify(payload),
+      usesTimeCard: useTimeCard,
     };
   }
 
@@ -284,7 +285,7 @@ export function createPospalAdapter(cfg, options = {}) {
     }
   }
 
-  function interpretGrabResponse(json) {
+  function interpretGrabResponse(json, usesTimeCard = false) {
     if (json && json.successed) {
       const res = json.result || {};
       if (res.script) {
@@ -296,7 +297,7 @@ export function createPospalAdapter(cfg, options = {}) {
           raw: json,
         };
       }
-      return { success: true, orderId: res.apptUid, message: "抢订成功并已使用余额支付", raw: json };
+      return { success: true, orderId: res.apptUid, message: usesTimeCard ? "抢订成功并已使用次卡支付" : "抢订成功并已使用余额支付", raw: json };
     }
     return {
       success: false,
@@ -308,12 +309,12 @@ export function createPospalAdapter(cfg, options = {}) {
   async function grab(target, cred) {
     const prebuilt = buildGrabRequest(target, cred);
     const { json } = await fireOnce(prebuilt);
-    return interpretGrabResponse(json);
+    return interpretGrabResponse(json, prebuilt.usesTimeCard);
   }
 
   async function fireGrab(prebuilt) {
     const { json } = await fireOnce(prebuilt);
-    return interpretGrabResponse(json);
+    return interpretGrabResponse(json, prebuilt.usesTimeCard);
   }
 
   async function listSlots(query, cred) {

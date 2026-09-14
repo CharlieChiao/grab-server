@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import yaml from "js-yaml";
 import { computeReleaseTimeUTC, autoFireAt } from "../src/core/timeUtil.js";
-import { refineUnavailableReason, unavailableReasonFromSlots } from "../src/core/scheduler.js";
+import { prepareBookingTarget, refineUnavailableReason, unavailableReasonFromSlots } from "../src/core/scheduler.js";
+import { interpretGrabResponse as interpretFunsportGrabResponse } from "../src/venues/funsport/index.js";
 import { db } from "../src/core/database.js";
 const venueConfig = yaml.load(fs.readFileSync(new URL("../src/venues/picklepop/venue.yml", import.meta.url), "utf8"));
 
@@ -56,4 +57,33 @@ test("calibrated release interval is applied on the first scheduled attempt", ()
   assert.equal(source.includes("attempt === 1 && !!job.fireAt && hasCalibratedReleaseInterval"), true);
   assert.equal(source.includes("hasCalibratedReleaseInterval ? releaseBaseInterval : fallbackReleaseInterval"), true);
   assert.equal(source.includes("releaseBaseInterval +"), false);
+});
+
+test("alternate targets run payment preparation before booking", async () => {
+  const target = { date: "2026-09-16", courts: [{ courtUid: "court-3", time: "19:00" }], ext: { payMethod: 220 } };
+  const credential = { PSPLVISITORID: "visitor" };
+  const calls = [];
+  const venue = {
+    async prepareTarget(receivedTarget, receivedCredential) {
+      calls.push({ receivedTarget, receivedCredential });
+      return { ...receivedTarget, ext: { ...receivedTarget.ext, venueTimeCardUid: "card-for-court-3" } };
+    },
+  };
+
+  const prepared = await prepareBookingTarget(venue, target, credential);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].receivedTarget, target);
+  assert.equal(calls[0].receivedCredential, credential);
+  assert.equal(prepared.ext.venueTimeCardUid, "card-for-court-3");
+
+  const source = fs.readFileSync(new URL("../src/core/scheduler.js", import.meta.url), "utf8");
+  assert.equal(source.includes("const preparedAltTarget = await prepareBookingTarget(venue, altTarget, credential)"), true);
+  assert.equal(source.includes("venue.grab(preparedAltTarget, credential)"), true);
+});
+
+test("Funsport time-card success is labelled as time-card payment", () => {
+  const result = interpretFunsportGrabResponse({ successed: true, result: { apptUid: "appt-1", script: "" } }, true);
+  assert.equal(result.success, true);
+  assert.equal(result.message, "抢订成功并已使用次卡支付");
 });
