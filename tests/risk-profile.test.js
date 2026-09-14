@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { getRiskProfile, recordRiskEvent, riskProfilePath } from "../src/core/riskProfile.js";
@@ -35,10 +35,10 @@ test("booking requests are serialized per venue", async () => {
 
 import { classifyResult, linearRetryDelay } from "../src/core/scheduler.js";
 
-test("scheduler classifies release and rate-limit responses", () => {
-  assert.equal(classifyResult({ success: false, message: "尚未放场" }), "not-released");
-  assert.equal(classifyResult({ success: false, message: "操作太频繁！" }), "rate-limited");
-  assert.equal(classifyResult({ success: false, message: "该时段不可约" }), "terminal");
+test("scheduler consumes structured failure classifications", () => {
+  assert.equal(classifyResult({ success: false, failure: { classification: "not-released" } }), "not-released");
+  assert.equal(classifyResult({ success: false, failure: { classification: "rate-limited" } }), "rate-limited");
+  assert.equal(classifyResult({ success: false, message: "provider-specific text" }), "terminal");
   assert.equal(classifyResult({ success: true }), "success");
 });
 

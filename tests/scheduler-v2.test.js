@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import yaml from "js-yaml";
 import { computeReleaseTimeUTC, autoFireAt } from "../src/core/timeUtil.js";
-import { prepareBookingTarget, refineUnavailableReason, unavailableReasonFromSlots } from "../src/core/scheduler.js";
+import { prepareBookingTarget, refineUnavailableFailure, refineUnavailableReason, unavailableReasonFromSlots } from "../src/core/scheduler.js";
+import { createFailureCapability } from "../src/core/failureReasons.js";
 import { interpretGrabResponse as interpretFunsportGrabResponse } from "../src/venues/funsport/index.js";
 import { db } from "../src/core/database.js";
 const venueConfig = yaml.load(fs.readFileSync(new URL("../src/venues/picklepop/venue.yml", import.meta.url), "utf8"));
@@ -20,11 +21,17 @@ test("dispatch audit schema exists", () => {
 });
 
 test("unavailable booking failure is refined with slot-level reason", async () => {
+  const capability = createFailureCapability({ rules: [
+    { kind: "scheduled", terminal: true, patterns: [/已被排课/] },
+    { kind: "occupied", terminal: true, patterns: [/已被预约/] },
+    { kind: "unavailable", inspectSlots: true, patterns: [/不可约/] },
+  ] });
   const mockVenue = {
+    classifyFailure: capability.classify,
     async listSlots() {
       return [
-        { uid: "court-a", court: "1号", begin: "2026-09-09 19:00:00", canAppoint: false, message: "2026-09-09(周三) 19:00-19:59场次已被排课" },
-        { uid: "court-a", court: "1号", begin: "2026-09-09 20:00:00", canAppoint: false, message: "2026-09-09(周三) 20:00-20:59场次已被预约" },
+        { uid: "court-a", court: "1号", begin: "2026-09-09 19:00:00", canAppoint: false, message: "2026-09-09(周三) 19:00-19:59场次已被排课", reason: "19:00已被排课" },
+        { uid: "court-a", court: "1号", begin: "2026-09-09 20:00:00", canAppoint: false, message: "2026-09-09(周三) 20:00-20:59场次已被预约", reason: "20:00已被预约" },
         { uid: "court-b", court: "2号", begin: "2026-09-09 19:00:00", canAppoint: true, message: "" },
       ];
     },
@@ -32,6 +39,9 @@ test("unavailable booking failure is refined with slot-level reason", async () =
   const job = { target: { date: "2026-09-09", courtUid: "court-a", time: "19:00" } };
   const reason = await refineUnavailableReason(mockVenue, job, {}, "该时段不可约");
   assert.equal(reason, "19:00已被排课");
+  const refined = await refineUnavailableFailure(mockVenue, job, {}, capability.classify({ success: false, message: "该时段不可约" }));
+  assert.equal(refined.failure.kind, "scheduled");
+  assert.equal(refined.failure.terminal, true);
   // 多时段任务收集全部原因
   const multi = { target: { date: "2026-09-09", courts: [{ courtUid: "court-a", time: "19:00" }, { courtUid: "court-a", time: "20:00" }] } };
   const multiReason = await refineUnavailableReason(mockVenue, multi, {}, "该时段不可约");

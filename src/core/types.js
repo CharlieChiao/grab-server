@@ -41,6 +41,17 @@
  * @property {string}  [orderId]    订单标识(如 apptUid)
  * @property {string}  [message]
  * @property {Object}  [raw]        原始返回
+ * @property {FailureReason} [failure] 注册中心按场馆声明自动附加的结构化失败原因
+ */
+
+/**
+ * @typedef {Object} FailureReason
+ * @property {string} kind          occupied/scheduled/locked/not_released/unavailable/rate_limited/transient/payment/unknown
+ * @property {string} classification terminal/not-released/release-pending/rate-limited/transient
+ * @property {boolean} retryable
+ * @property {boolean} terminal
+ * @property {boolean} inspectSlots 是否需要回查 listSlots 获取细分状态
+ * @property {string} [message]
  */
 
 /**
@@ -53,6 +64,8 @@
  *           抢票入口。
  * @property {(query: Object, cred: Credential) => Promise<any>} [listSlots]
  *           (可选)查询可约时段。
+ * @property {{rules: Array<Object>}} [failureReasons]
+ *           (可选)声明平台错误码、场次状态或响应文案到统一 FailureReason 的映射；注册中心自动生成 classifyFailure。
  */
 
 export {};

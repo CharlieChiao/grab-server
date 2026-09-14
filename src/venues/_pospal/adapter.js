@@ -332,18 +332,25 @@ export function createPospalAdapter(cfg, options = {}) {
       cost: s.cost,
       canAppoint: s.apptInfo && s.apptInfo.canApptOrNot,
       message: s.apptInfo && s.apptInfo.errorMessage,
+      reason: (() => {
+        const message = String(s.apptInfo?.errorMessage || "");
+        const match = /(\d{2}:\d{2})-\d{2}:\d{2}场次(.+)$/.exec(message);
+        return match ? `${match[1]}${match[2]}` : message;
+      })(),
     }));
   }
 
-  function classifyGrabResult(result) {
-    if (result && result.success) return "success";
-    const text = JSON.stringify(result || {}).toLowerCase();
-    if (text.includes("操作太频繁") || text.includes("操作频繁") || text.includes("429")) return "rate-limited";
-    if (text.includes("已被排课") || text.includes("排课") || text.includes("锁场")) return "terminal";
-    if (text.includes("尚未放场") || text.includes("还没开场") || text.includes("未开放") || text.includes("超过可预约日期")) return "not-released";
-    if (text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("502") || text.includes("503")) return "transient";
-    return "terminal";
-  }
+  const failureReasons = {
+    rules: [
+      { kind: "rate_limited", classification: "rate-limited", retryable: true, patterns: [/操作太频繁|操作频繁|too frequent|rate limit/i], codes: [429] },
+      { kind: "scheduled", terminal: true, patterns: [/已被排课|排课/] },
+      { kind: "locked", terminal: true, patterns: [/已被锁场|锁场/] },
+      { kind: "occupied", terminal: true, patterns: [/已被预约|已被预定|已占用|已满|occupied|booked/i] },
+      { kind: "not_released", classification: "not-released", retryable: true, patterns: [/尚未放场|还没开场|未开放|超过可预约日期|not.?released/i] },
+      { kind: "unavailable", inspectSlots: true, patterns: [/不可约|不可预约|无效时段/] },
+      { kind: "transient", classification: "transient", retryable: true, patterns: [/timeout|aborted|econn|HTTP 50[23]/i] },
+    ],
+  };
 
   function saveRetryCalibration(calibration) {
     if (!venueFile) return null;
@@ -380,5 +387,5 @@ export function createPospalAdapter(cfg, options = {}) {
     }
   }
 
-  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, prepareTarget, listSlots, interpretGrabResponse, classifyGrabResult, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, loadTimeCards, pickTimeCard, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance, timecard: B.payMethodTimeCard != null ? B.payMethodTimeCard : null } };
+  return { meta, riskProfile, ready, grab, preheat, buildGrabRequest, fireGrab, prepareTarget, listSlots, interpretGrabResponse, failureReasons, discoverCapture, riskProbe, saveRetryCalibration, listMyBookings, cancelBooking, loadTimeCards, pickTimeCard, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance, timecard: B.payMethodTimeCard != null ? B.payMethodTimeCard : null } };
 }

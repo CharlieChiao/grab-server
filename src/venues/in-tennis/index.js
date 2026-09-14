@@ -1,6 +1,6 @@
 /**
  * In Tennis 球场适配器 (CRMEB 场地预约系统)
- * 实现统一接口: meta / ready / grab / listSlots (+ classifyGrabResult / payments / riskProfile)
+ * 实现统一接口: meta / ready / grab / listSlots (+ failureReasons / payments / riskProfile)
  *
  * CRMEB 下单链路(4 步, 每步失败即终止):
  *   cart/add → order/confirm(orderKey) → order/computed/<orderKey> → order/create/<orderKey>
@@ -162,12 +162,16 @@ async function grab(target, cred) {
   return { success: true, orderId, message: `下单成功(${created.json.data?.status || payType})`, raw: created.json };
 }
 
-export function classifyGrabResult(result) {
-  if (result?.success) return "success";
-  const text = String(result?.message || "");
-  if (/频繁|稍后再试|too frequent/i.test(text)) return "rate-limited";
-  if (/超时|timeout|网络/i.test(text)) return "transient";
-  return "terminal";
-}
+export const failureReasons = {
+  rules: [
+    { kind: "rate_limited", classification: "rate-limited", retryable: true, patterns: [/频繁|稍后再试|too frequent|rate limit/i], codes: [429] },
+    { kind: "scheduled", terminal: true, patterns: [/排课|training_reserved/i] },
+    { kind: "locked", terminal: true, patterns: [/锁场|locked/i] },
+    { kind: "occupied", terminal: true, patterns: [/已被预约|已被预定|已占用|已满|occupied|booked/i] },
+    { kind: "not_released", classification: "not-released", retryable: true, patterns: [/尚未放场|未开放|not.?released/i] },
+    { kind: "unavailable", inspectSlots: true, patterns: [/不可预约|不可约|未找到场次|无效时段/] },
+    { kind: "transient", classification: "transient", retryable: true, patterns: [/超时|timeout|网络|aborted|econn|HTTP 50[23]/i] },
+  ],
+};
 
-export default { meta, riskProfile, ready, grab, listSlots, classifyGrabResult, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };
+export default { meta, riskProfile, ready, grab, listSlots, failureReasons, payments: { wechat: B.payMethodWechat, balance: B.payMethodBalance } };

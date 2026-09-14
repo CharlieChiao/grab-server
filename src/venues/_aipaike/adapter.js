@@ -11,6 +11,7 @@
  */
 import { Pool } from "undici";
 import { setCredential } from "../../core/credentialStore.js";
+import { createKeyedSingleFlight } from "../../core/singleFlight.js";
 
 export function createAipaikeAdapter(cfg) {
   const B = cfg.backend;
@@ -56,11 +57,13 @@ export function createAipaikeAdapter(cfg) {
     return { status: statusCode, json };
   }
 
-  // 单飞刷新: 并发 401 只触发一次 refresh; 响应 {token(2h), refreshToken(7d, 轮换)}
-  let refreshing = null;
+  // 按账号单飞刷新: 同账号并发 401 共用一次 refresh, 不同账号互不共享 token。
+  const runRefresh = createKeyedSingleFlight({ lingerMs: 50 });
   async function tryRefresh(cred) {
-    if (!refreshing) {
-      refreshing = (async () => {
+    const accountKey = cred?._userId
+      ? `user:${cred._userId}`
+      : `refresh:${String(cred?.refreshToken || "")}`;
+    return runRefresh(accountKey, async () => {
         try {
           const r = await fetch(B.base + "/api/v1/auth/refresh", {
             method: "POST",
@@ -84,12 +87,8 @@ export function createAipaikeAdapter(cfg) {
         } catch (e) {
           console.warn(`[aipaike:${cfg.id}] refresh failed: ${String(e?.message || e)}`);
           return null;
-        } finally {
-          setTimeout(() => { refreshing = null; }, 50);
         }
-      })();
-    }
-    return refreshing;
+    });
   }
   const post = (p, cred, payload, t) => request("POST", p, cred, payload, t);
   const get = (p, cred, t) => request("GET", p, cred, undefined, t);
@@ -123,6 +122,7 @@ export function createAipaikeAdapter(cfg) {
     const data = json.data || {};
     const nameByUid = Object.fromEntries((data.venues || []).map((v) => [v.id, v.name]));
     const slots = [];
+    const statusMessage = { occupied: "已被预约", training_reserved: "已被排课", locked: "已被锁场", not_released: "尚未放场" };
     for (const cells of Object.values(data.cells || {})) {
       for (const cell of cells || []) {
         slots.push({
@@ -130,6 +130,8 @@ export function createAipaikeAdapter(cfg) {
           court: nameByUid[cell.venueId] || cell.venueId,
           begin: `${query.date} ${cell.start}:00`,
           canAppoint: cell.status === "free",
+          slotStatus: cell.status,
+          message: cell.message || cell.reason || statusMessage[cell.status] || cell.status,
           cost: Number(cell.price) || 0,
         });
       }
@@ -207,16 +209,20 @@ export function createAipaikeAdapter(cfg) {
     return { ok: false, error: (json && (json.message || `code=${json.code}`)) || `取消失败(HTTP ${status})` };
   }
 
-  function classifyGrabResult(result) {
-    if (result?.success === true) return "success";
-    const message = String(result?.message || "");
-    if (/频繁|frequen|429|too many/i.test(message)) return "rate-limited";
-    if (/已被预约|不可预约|occupied|已占用|已满/i.test(message)) return "not-released";
-    return "terminal";
-  }
+  const failureReasons = {
+    rules: [
+      { kind: "rate_limited", classification: "rate-limited", retryable: true, patterns: [/频繁|frequen|too many/i], codes: [429] },
+      { kind: "scheduled", terminal: true, slotStatuses: ["training_reserved"], patterns: [/排课|training_reserved/i] },
+      { kind: "locked", terminal: true, slotStatuses: ["locked"], patterns: [/锁场|locked/i] },
+      { kind: "occupied", terminal: true, slotStatuses: ["occupied", "full"], patterns: [/已被预约|已被预定|occupied|已占用|已满|booked/i] },
+      { kind: "not_released", classification: "not-released", retryable: true, slotStatuses: ["not_released"], patterns: [/尚未放场|未开放|not.?released/i] },
+      { kind: "unavailable", inspectSlots: true, patterns: [/不可预约|不可约|无效时段|unavailable/i] },
+      { kind: "transient", classification: "transient", retryable: true, patterns: [/超时|timeout|aborted|econn|HTTP 50[23]/i] },
+    ],
+  };
 
   return {
-    meta, riskProfile, ready, grab, listSlots, listMyBookings, cancelBooking, classifyGrabResult,
+    meta, riskProfile, ready, grab, listSlots, listMyBookings, cancelBooking, failureReasons,
     payments: { wechat: "wechat" },
   };
 }

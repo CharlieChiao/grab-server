@@ -9,17 +9,19 @@ const clamp = (value, fallback, min, max) => {
   return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
 };
 
-function classify(venue, result) {
-  const text = JSON.stringify(result || {}).toLowerCase();
-  if (result?.success) return "success";
-  if (/\u64cd\u4f5c\u592a\u9891\u7e41|\u64cd\u4f5c\u9891\u7e41|429|too frequent|rate limit/i.test(text)) return "rate-limited";
-  if (typeof venue.classifyGrabResult === "function") return venue.classifyGrabResult(result);
-  return "terminal";
+function failureOf(venue, result) {
+  if (typeof venue.classifyFailure === "function") return venue.classifyFailure(result);
+  if (result?.failure?.classification) return result.failure;
+  return { kind: result?.success ? "success" : "unknown", classification: result?.success ? "success" : "terminal", inspectSlots: false };
 }
 
+function classify(venue, result) {
+  return failureOf(venue, result).classification;
+}
 
-function isUnavailable(result) {
-  return /\u8be5\u65f6\u6bb5\u4e0d\u53ef\u7ea6|\u65e0\u6548\u65f6\u6bb5|\u5c1a\u672a\u653e\u573a|\u8fd8\u6ca1\u5f00\u573a|\u672a\u5f00\u653e/.test(String(result?.message || ""));
+function isUnavailable(venue, result) {
+  const failure = failureOf(venue, result);
+  return failure.kind === "unavailable" || failure.kind === "not_released";
 }
 
 const calibrationRuns = new Map();
@@ -77,7 +79,7 @@ export async function calibrateUnavailableRetry({ venueId, userId, target, sampl
       onProgress({ candidateExtraWaitMs: extra, samples, attempts: allAttempts.length, last: row });
       if (result?.success) return { ok: false, stopped: "unexpected-success", createdUnpaidOrder: true, orderId: result.orderId || null, attempts: allAttempts, message: "Target became bookable; calibration stopped without saving. Release the unpaid order." };
       if (classification === "rate-limited") { rateLimited = true; break; }
-      if (!isUnavailable(result)) return { ok: false, stopped: "unexpected-response", attempts: allAttempts, message: String(result?.message || "Unexpected response") };
+      if (!isUnavailable(venue, result)) return { ok: false, stopped: "unexpected-response", attempts: allAttempts, message: String(result?.message || "Unexpected response") };
     }
     if (!rateLimited && candidate.length === samples) {
       const observedGaps = candidate.map((row) => row.dispatchGapMs).filter(Number.isFinite);

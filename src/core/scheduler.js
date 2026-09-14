@@ -7,6 +7,7 @@ import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess } from "./jobGroups.js";
 import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable } from "./paymentLifecycle.js";
+import { normalizeFailure } from "./failureReasons.js";
 
 const TICK_MS = 1000;
 const LOOKAHEAD_MS = 60000;
@@ -65,35 +66,57 @@ export async function prepareBookingTarget(venue, target, credential) {
   return typeof venue?.prepareTarget === "function" ? venue.prepareTarget(target, credential) : target;
 }
 
-export function unavailableReasonFromSlots(target, slots) {
-  const wanted = Array.isArray(target?.courts) && target.courts.length
+function wantedSlots(target) {
+  return Array.isArray(target?.courts) && target.courts.length
     ? target.courts.map((c) => ({ uid: c.courtUid, court: c.court, time: c.time || target.time }))
     : [{ uid: target?.courtUid, court: target?.court, time: target?.time }];
-  const reasons = [];
-  for (const slot of slots || []) {
-    for (const w of wanted) {
-      const courtMatch = w.uid ? String(slot.uid) === String(w.uid) : String(slot.court || "") === String(w.court || "");
-      const timeMatch = String(slot.begin || "").slice(11, 16) === String(w.time || "").slice(0, 5);
-      if (courtMatch && timeMatch && !slot.canAppoint) {
-        const match = /(\d{2}:\d{2})-\d{2}:\d{2}场次(.+)$/.exec(String(slot.message || ""));
-        const text = match ? `${match[1]}${match[2]}` : String(slot.message || "不可约");
-        if (!reasons.includes(text)) reasons.push(text);
-      }
-    }
-  }
-  return reasons.length ? reasons.join("、") : null;
 }
 
-// 下单报"不可约"时回查 listSlots, 把银豹的细分原因(已被预约/已被锁场/已被排课)附加到失败消息
-export async function refineUnavailableReason(venue, job, credential, message) {
-  if (!/不可约|不可预约/.test(String(message || ""))) return null;
-  if (typeof venue?.listSlots !== "function") return null;
+function matchingUnavailableSlots(target, slots) {
+  const wanted = wantedSlots(target);
+  return (slots || []).filter((slot) => wanted.some((item) => {
+    const courtMatch = item.uid ? String(slot.uid) === String(item.uid) : String(slot.court || "") === String(item.court || "");
+    return courtMatch && String(slot.begin || "").slice(11, 16) === String(item.time || "").slice(0, 5) && !slot.canAppoint;
+  }));
+}
+
+function displaySlotReason(slot) {
+  return String(slot.reason || slot.message || slot.slotStatus || "不可约");
+}
+
+export function unavailableReasonFromSlots(target, slots) {
+  const reasons = matchingUnavailableSlots(target, slots).map(displaySlotReason);
+  return [...new Set(reasons)].join("、") || null;
+}
+
+export function classifyFailure(venue, result) {
+  if (typeof venue?.classifyFailure === "function") return venue.classifyFailure(result);
+  if (result?.failure?.classification) return result.failure;
+  return normalizeFailure(result?.success === true ? "success" : "unknown", { classification: classifyResult(result) }, result?.message);
+}
+
+export async function refineUnavailableFailure(venue, job, credential, failure) {
+  if (failure?.inspectSlots !== true || typeof venue?.listSlots !== "function") return null;
   try {
     const slots = await venue.listSlots({ date: job.target?.date }, credential);
-    return unavailableReasonFromSlots(job.target, slots);
+    const matched = matchingUnavailableSlots(job.target, slots);
+    const details = matched.map((slot) => ({
+      failure: classifyFailure(venue, { success: false, message: slot.message, slotStatus: slot.slotStatus || slot.status }),
+      message: displaySlotReason(slot),
+    }));
+    const decisive = details.find((item) => ["occupied", "scheduled", "locked"].includes(item.failure.kind));
+    return { failure: decisive?.failure || null, message: [...new Set(details.map((item) => item.message))].join("、") || null };
   } catch {
     return null;
   }
+}
+
+// Compatibility helper for callers that only need the display reason.
+export async function refineUnavailableReason(venue, job, credential, messageOrFailure) {
+  const failure = typeof messageOrFailure === "object"
+    ? messageOrFailure
+    : classifyFailure(venue, { success: false, message: String(messageOrFailure || "") });
+  return (await refineUnavailableFailure(venue, job, credential, failure))?.message || null;
 }
 
 // 放场等待(watch 模式): 首发下单报"未放场"后, 改用随机短间隔轮询 listSlots 的 canAppoint(模拟人刷新)。
@@ -171,19 +194,23 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
           return prebuilt && typeof venue.fireGrab === "function" ? venue.fireGrab(prebuilt) : venue.grab(job.target, credential);
         }, { priority: "high", ...(useReleaseLimiter ? { minIntervalMs: releaseInterval, jitterMs: Number(fastRetry.jitterMs || 0) } : {}) });
       } catch (e) { result = { success: false, message: String(e.message || e) }; }
-      let classification = typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result);
+      let failure = classifyFailure(venue, result);
+      let classification = failure.classification;
       const releaseElapsedMs = job.fireAt ? Math.max(0, Date.now() - new Date(job.fireAt).getTime()) : Number.POSITIVE_INFINITY;
       const releaseWindowMs = Number(retryPolicy.unavailableGraceMs || 0);
       const unavailableText = String(result?.message || "");
-      if (classification === "terminal" && releaseWindowMs > 0 && releaseElapsedMs <= releaseWindowMs && /不可约|无效时段/.test(unavailableText)) {
-        // 放场宽限内的"不可约"先回查场次细分: 真被占(已被预约/排课/锁场)保持终态立即放弃全部重试, 只有疑似未放出才降级继续等
-        const reason = await refineUnavailableReason(venue, job, credential, unavailableText);
-        if (reason && /已被预约|已被排课|已被锁场/.test(reason)) {
-          result = { ...result, message: `${unavailableText}（${reason}）` };
-          classification = "terminal";
-          console.log(`[grab] job=${job.id} slot occupied (${reason}), abandoning remaining attempts`);
+      if (failure.inspectSlots && releaseWindowMs > 0 && releaseElapsedMs <= releaseWindowMs) {
+        // 适配器声明“需要回查场次”后才诊断；核心只读取结构化 kind，不解析平台文案。
+        const refined = await refineUnavailableFailure(venue, job, credential, failure);
+        if (refined?.failure && ["occupied", "scheduled", "locked"].includes(refined.failure.kind)) {
+          failure = refined.failure;
+          classification = failure.classification;
+          result = { ...result, failure, message: refined.message && !unavailableText.includes(refined.message) ? `${unavailableText}（${refined.message}）` : unavailableText };
+          console.log(`[grab] job=${job.id} slot ${failure.kind} (${refined.message || failure.message}), abandoning remaining attempts`);
         } else {
-          classification = "release-pending";
+          failure = normalizeFailure("not_released", { classification: "release-pending", retryable: true }, unavailableText);
+          classification = failure.classification;
+          result = { ...result, failure };
         }
       }
       recordAttempt(job, attempt, dispatchedMs || Date.now(), classification, dispatchedMs ? Date.now() - dispatchedMs : 0, result?.message);
@@ -232,6 +259,7 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
             return venue.grab(preparedAltTarget, credential);
           }, { priority: "high" });
         } catch (e) { altResult = { success: false, message: String(e.message || e) }; }
+        const altFailure = classifyFailure(venue, altResult);
         const altClass = altResult?.success === true ? "success" : "alternate-failed";
         const altFinishedMs = Date.now();
         const altCourts = Array.isArray(alt.courts)
@@ -245,15 +273,15 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
           result = { ...altResult, message: `主目标失败（${result?.message || "未知"}），已改用备选 ${altLabel} 下单成功：${altResult.message || ""}` };
           break;
         }
-        alternateFailures.push({ attempt: 100 + i + 1, index: i + 1, target: altTarget, label: altLabel, message: altMessage });
+        alternateFailures.push({ attempt: 100 + i + 1, index: i + 1, target: altTarget, label: altLabel, message: altMessage, failure: altFailure });
       }
       if (result?.success !== true && alternateFailures.length) {
         let diagnosticSlots = null;
-        if (alternateFailures.some((failure) => /不可约|不可预约/.test(failure.message)) && typeof venue.listSlots === "function") {
+        if (alternateFailures.some((item) => item.failure?.inspectSlots) && typeof venue.listSlots === "function") {
           try { diagnosticSlots = await venue.listSlots({ date: job.target?.date }, credential); } catch {}
         }
         const details = alternateFailures.map((failure) => {
-          const reason = diagnosticSlots ? unavailableReasonFromSlots(failure.target, diagnosticSlots) : null;
+          const reason = diagnosticSlots && failure.failure?.inspectSlots ? unavailableReasonFromSlots(failure.target, diagnosticSlots) : null;
           const message = reason && !failure.message.includes(reason) ? `${failure.message}（${reason}）` : failure.message;
           try { db.prepare("UPDATE job_attempts SET message=? WHERE job_id=? AND attempt=?").run(`[备选${failure.index}] ${message}`, job.id, failure.attempt); } catch {}
           if (reason) console.warn(`[grab] job=${job.id} alternate=${failure.index}/${alternates.length} detail=${reason}`);
@@ -275,8 +303,8 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
       else if (fallback) result = { ...result, message: `${result?.message || "抢订失败"}；本人余额兜底未成功: ${fallback.message}` };
     }
     if (result?.success !== true) {
-      // 下单"不可约"失败后回查场次状态细分原因: 已被预约=真被人抢走(脚本慢), 已被锁场/排课=时段本身不可抢(等放场无意义)
-      const reason = await refineUnavailableReason(venue, job, credential, result?.message);
+      // 按适配器声明的结构化能力回查场次，只把明细文本用于展示。
+      const reason = await refineUnavailableReason(venue, job, credential, classifyFailure(venue, result));
       if (reason && !String(result.message || "").includes(reason)) result = { ...result, message: `${result.message}（${reason}）` };
     }
     const outcome = result?.success ? "success" : "failed";
@@ -302,10 +330,9 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
 
 export function classifyResult(result) {
   if (result?.success) return "success";
-  const text = JSON.stringify(result || {}).toLowerCase();
-  if (text.includes("操作太频繁") || text.includes("操作频繁") || text.includes("too frequent") || text.includes("rate limit") || text.includes("429")) return "rate-limited";
-  if (text.includes("尚未放场") || text.includes("还没开场") || text.includes("未开放") || text.includes("超过可预约日期") || text.includes("not released")) return "not-released";
-  if (text.includes("timeout") || text.includes("aborted") || text.includes("econn") || text.includes("502") || text.includes("503")) return "transient";
+  if (result?.failure?.classification) return result.failure.classification;
+  if ([429, "429"].includes(result?.status) || [429, "429"].includes(result?.code)) return "rate-limited";
+  if (result?.transient === true) return "transient";
   return "terminal";
 }
 export function linearRetryDelay(profile, classification) {

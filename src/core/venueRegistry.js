@@ -22,6 +22,8 @@
  *        下单前异步注入支付所需字段(次卡 → venueTimeCardUid, 银豹在 pickTimeCard 中自动选卡)。
  *        上层(scheduler 预构建前 / 任何下单前)调用, 未实现的适配器原样透传; 抛错按下单失败处理。
  *        —— 新球场接入次卡类支付只需实现 payments.timecard + prepareTarget, 上层逻辑零改动
+ *        failureReasons{rules:[...]} 失败原因声明; 注册中心自动提供 classifyFailure(result) 并为失败结果附加
+ *        failure{kind,classification,retryable,terminal,inspectSlots,message}, 核心层不解析场馆文案。
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];
@@ -47,6 +49,7 @@ import { normalizeCourtType, COURT_TYPES } from "./courtTypes.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createFailureCapability } from "./failureReasons.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VENUES_DIR = path.join(__dirname, "..", "venues");
@@ -71,6 +74,15 @@ export async function loadVenues() {
         continue;
       }
       const registered = { ...adapter, meta: normalizeMeta(adapter.meta) };
+      if (adapter.failureReasons) {
+        const capability = createFailureCapability(adapter.failureReasons, adapter.classifyGrabResult);
+        registered.classifyFailure = capability.classify;
+        registered.classifyGrabResult = (result) => capability.classify(result).classification;
+        for (const method of ["grab", "fireGrab"]) {
+          if (typeof adapter[method] !== "function") continue;
+          registered[method] = async (...args) => capability.decorate(await adapter[method](...args));
+        }
+      }
       // 场地类型契约: courtUidsForType(type) → uid[]|null。未显式实现的适配器从 courts 派生;
       // courts 未声明任何场地 → 不支持任何类型(前端变灰, 无法创建/选中该球场的捡漏任务)
       if (typeof registered.courtUidsForType !== "function") {
