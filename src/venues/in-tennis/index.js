@@ -169,6 +169,7 @@ export const failureReasons = {
     { kind: "locked", terminal: true, patterns: [/锁场|locked/i] },
     { kind: "occupied", terminal: true, patterns: [/已被预约|已被预定|已占用|已满|occupied|booked/i] },
     { kind: "not_released", classification: "not-released", retryable: true, patterns: [/尚未放场|未开放|not.?released/i] },
+    { kind: "payment", terminal: true, patterns: [/余额不足|支付方式不可用|支付失败|insufficient.*balance|payment.*failed/i] },
     { kind: "unavailable", inspectSlots: true, patterns: [/不可预约|不可约|未找到场次|无效时段/] },
     { kind: "transient", classification: "transient", retryable: true, patterns: [/超时|timeout|网络|aborted|econn|HTTP 50[23]/i] },
   ],

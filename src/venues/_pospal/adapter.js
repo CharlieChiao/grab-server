@@ -347,6 +347,7 @@ export function createPospalAdapter(cfg, options = {}) {
       { kind: "locked", terminal: true, patterns: [/已被锁场|锁场/] },
       { kind: "occupied", terminal: true, patterns: [/已被预约|已被预定|已占用|已满|occupied|booked/i] },
       { kind: "not_released", classification: "not-released", retryable: true, patterns: [/尚未放场|还没开场|未开放|超过可预约日期|not.?released/i] },
+      { kind: "payment", terminal: true, patterns: [/余额不足|账户余额不足|支付余额不足|次卡次数不足|次卡余额不足|次卡不可用|支付方式不可用|支付失败|time.?card.*insufficient|insufficient.*balance/i] },
       { kind: "unavailable", inspectSlots: true, patterns: [/不可约|不可预约|无效时段/] },
       { kind: "transient", classification: "transient", retryable: true, patterns: [/timeout|aborted|econn|HTTP 50[23]/i] },
     ],

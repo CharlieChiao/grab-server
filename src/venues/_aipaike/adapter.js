@@ -216,6 +216,7 @@ export function createAipaikeAdapter(cfg) {
       { kind: "locked", terminal: true, slotStatuses: ["locked"], patterns: [/锁场|locked/i] },
       { kind: "occupied", terminal: true, slotStatuses: ["occupied", "full"], patterns: [/已被预约|已被预定|occupied|已占用|已满|booked/i] },
       { kind: "not_released", classification: "not-released", retryable: true, slotStatuses: ["not_released"], patterns: [/尚未放场|未开放|not.?released/i] },
+      { kind: "payment", terminal: true, patterns: [/余额不足|支付方式不可用|支付失败|insufficient.*balance|payment.*failed/i] },
       { kind: "unavailable", inspectSlots: true, patterns: [/不可预约|不可约|无效时段|unavailable/i] },
       { kind: "transient", classification: "transient", retryable: true, patterns: [/超时|timeout|aborted|econn|HTTP 50[23]/i] },
     ],

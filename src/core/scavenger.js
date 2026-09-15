@@ -13,6 +13,7 @@ import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { notifyJobResult } from "./notifications.js";
 import { classifyResult } from "./scheduler.js";
 import { targetSlotsAvailable } from "./paymentLifecycle.js";
+import { normalizePayOrder, payStepsForVenue, canSwitchPayment } from "./scavengePayments.js";
 
 const TICK_MS = 1000;
 const POLL_BASE_MS = Number(process.env.SCAVENGE_POLL_MS || 5000);   // 轮询基础间隔
@@ -120,8 +121,8 @@ function rowToTask(row) {
     courtTypes: parseCourtTypes(row.court_types_json),
     allowCombine: !!row.allow_combine, allowPartial: !!row.allow_partial, allowNonrefundable: !!row.allow_nonrefundable,
     maxTotalCost: Number(row.max_total_cost),
-    // 支付优先级: balance-first(余额优先, 余额不足自动改微信锁场) / wechat-first; 兼容旧单值
-    payKind: row.pay_kind === "wechat-first" || row.pay_kind === "wechat" ? "wechat-first" : "balance-first",
+    payKind: row.pay_kind,
+    payOrder: (() => { try { return normalizePayOrder(JSON.parse(row.pay_order_json || "null"), row.pay_kind); } catch { return normalizePayOrder(null, row.pay_kind); } })(),
     status: row.status,
     bookings, stats, createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -164,12 +165,14 @@ export function createScavengeTask(userId, input) {
   if (eMin <= sMin) eMin += 1440; // 跨天
   const spanError = validateOrderSpan(input.venueIds, sMin, eMin, input.allowPartial !== false);
   if (spanError) return { error: spanError };
+  const payOrder = normalizePayOrder(input.payOrder, input.payKind);
+  if (!payOrder) return { error: "支付顺序无效" };
   const id = crypto.randomUUID();
   const now = nowIso();
-  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_types_json,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  db.prepare("INSERT INTO scavenge_tasks(id,user_id,venue_ids_json,date,start_time,end_time,court_types_json,allow_combine,allow_partial,allow_nonrefundable,max_total_cost,pay_kind,pay_order_json,status,bookings_json,stats_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run(id, userId, JSON.stringify(input.venueIds), input.date, input.startTime, input.endTime, JSON.stringify(courtTypes),
       input.allowCombine === false ? 0 : 1, input.allowPartial === false ? 0 : 1, input.allowNonrefundable === false ? 0 : 1,
-      input.maxTotalCost, input.payKind, "active", "[]", "{}", now, now);
+      input.maxTotalCost, input.payKind || `${payOrder[0]}-first`, JSON.stringify(payOrder), "active", "[]", "{}", now, now);
   return getScavengeTask(id, userId);
 }
 export function getScavengeTask(id, userId) {
@@ -246,8 +249,15 @@ export function updateScavengeTask(id, userId, input = {}) {
   if (startMin == null || endMin == null || endMin === startMin) return { error: "时间无效(结束需晚于开始)" };
   const maxTotalCost = input.maxTotalCost === undefined ? Number(row.max_total_cost) : Number(input.maxTotalCost);
   if (!Number.isFinite(maxTotalCost) || maxTotalCost <= 0) return { error: "预算必须是正数" };
-  const payKind = input.payKind === undefined ? row.pay_kind : String(input.payKind);
+  const payKind = input.payOrder !== undefined ? `${input.payOrder?.[0]}-first` : input.payKind === undefined ? row.pay_kind : String(input.payKind);
   if (payKind !== "balance-first" && payKind !== "wechat-first" && payKind !== "timecard-first") return { error: "支付优先级无效" };
+  let savedOrder = null;
+  try { savedOrder = JSON.parse(row.pay_order_json || "null"); } catch {}
+  const payOrder = normalizePayOrder(input.payOrder === undefined ? (input.payKind === undefined ? savedOrder : null) : input.payOrder, payKind);
+  if (!payOrder) return { error: "支付顺序无效" };
+  const venueIds = JSON.parse(row.venue_ids_json || "[]");
+  const noPay = venueIds.filter((venueId) => !payStepsForVenue(payOrder, getVenue(venueId)?.payments).length);
+  if (noPay.length) return { error: `以下场馆不支持所选支付方式: ${noPay.map((id) => getVenue(id)?.meta?.name || id).join("、")}` };
   const allowCombine = input.allowCombine === undefined ? !!row.allow_combine : !!input.allowCombine;
   const allowPartial = input.allowPartial === undefined ? !!row.allow_partial : !!input.allowPartial;
   const allowNonrefundable = input.allowNonrefundable === undefined ? !!row.allow_nonrefundable : !!input.allowNonrefundable;
@@ -258,8 +268,8 @@ export function updateScavengeTask(id, userId, input = {}) {
     courtTypes = [...new Set((input.courtTypes || []).map(String).filter(Boolean))];
     if (!courtTypes.length) return { error: "必须至少选择一种场地类型" };
   }
-  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_types_json=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,updated_at=? WHERE id=?")
-    .run(date, startTime, endTime, JSON.stringify(courtTypes), allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, nowIso(), id);
+  db.prepare("UPDATE scavenge_tasks SET date=?,start_time=?,end_time=?,court_types_json=?,allow_combine=?,allow_partial=?,allow_nonrefundable=?,max_total_cost=?,pay_kind=?,pay_order_json=?,updated_at=? WHERE id=?")
+    .run(date, startTime, endTime, JSON.stringify(courtTypes), allowCombine ? 1 : 0, allowPartial ? 1 : 0, allowNonrefundable ? 1 : 0, maxTotalCost, payKind, JSON.stringify(payOrder), nowIso(), id);
   return { task: getScavengeTask(id, userId) };
 }
 
@@ -317,16 +327,9 @@ async function pollTask(task) {
     if (avoid.n > 0) continue;
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "场地不支持查询" }; continue; }
-    // 支付优先级: 主支付 + 备选支付(主支付失败如余额不足时, 自动换备选支付重下同一批场次)
-    // timecard-first: 次卡优先(0 元核销), 次卡不足/失败自动换余额
-    const payKind = task.payKind || "balance-first";
-    const timecardFirst = payKind === "timecard-first";
-    const wechatFirst = payKind === "wechat-first";
-    const payCodes = {
-      primary: timecardFirst ? venue.payments?.timecard : venue.payments?.[wechatFirst ? "wechat" : "balance"],
-      fallback: venue.payments?.[timecardFirst ? "balance" : (wechatFirst ? "balance" : "wechat")],
-    };
-    if (payCodes.primary == null && payCodes.fallback == null) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "不支持任何支付方式" }; continue; }
+    // 每个场馆从任务支付顺序中只保留该适配器声明支持的方式。
+    const paySteps = payStepsForVenue(task.payOrder, venue.payments);
+    if (!paySteps.length) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "不支持所选支付方式" }; continue; }
     const credential = getCredential(venueId, task.userId);
     if (!credential) { stats.venueErrors = { ...(stats.venueErrors || {}), [venueId]: "未配置凭证" }; continue; }
     let slots;
@@ -370,7 +373,7 @@ async function pollTask(task) {
       if (!pick) continue;
       // 关键流程日志: 发现可约场次(每次轮询静默, 仅在真正有机会时输出)
       console.log(`[scavenger] task=${task.id} ${venue.meta.name} 发现可约${candidates.full ? "" : "(部分)"}: ${pick.chain.map((s) => `${s.court} ${s.time}`).join(" + ")} ¥${pick.chain.reduce((sum, x) => sum + x.cost, 0)}`);
-      const outcome = await bookSlots(task, venue, credential, pick.chain, payCodes, stats);
+      const outcome = await bookSlots(task, venue, credential, pick.chain, paySteps, stats);
       if (outcome) {
         bookings = [...bookings, outcome.booking];
         covered = coveredOf({ ...task, bookings });
@@ -385,52 +388,61 @@ async function pollTask(task) {
 }
 
 // 下单(走限流队列, 与普通抢订共用 店铺+凭证 scope 正确互斥); 失败只记录不通知
-// 支付优先级: 先用主支付下单, 失败(如余额不足/时段刚被占走前的支付类失败)自动换备选支付重下同一批场次
-async function bookSlots(task, venue, credential, chain, payCodes, stats) {
+// 支付优先级按场馆能力过滤；仅明确的支付失败才尝试下一种，避免重复下单
+async function bookSlots(task, venue, credential, chain, paySteps, stats) {
   const totalCost = chain.reduce((sum, x) => sum + x.cost, 0);
   const base = venue.riskProfile || {};
   const profile = { ...base, scopeKey: `${base.scopeKey || venue.meta.id}:${task.userId}` };
-  // 次卡支付: 主支付为次卡时按场次自动选卡注入 venueTimeCardUid(适配器契约); 选不到卡直接走备选支付
-  const timecardCode = venue.payments?.timecard;
-  let primaryCode = payCodes.primary;
-  let timeCardUid = null;
-  if (timecardCode != null && Number(payCodes.primary) === Number(timecardCode) && typeof venue.pickTimeCard === "function") {
-    const hm = (min) => `${String(Math.floor((min % 1440) / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}:00`;
-    const dayOf = (min) => (min >= 1440 ? new Date(Date.parse(task.date + "T00:00:00Z") + 86400000).toISOString().slice(0, 10) : task.date);
-    const items = chain.map((s) => ({ classroomUid: s.uid, beginDatetime: `${dayOf(s.beginMin)} ${hm(s.beginMin)}`, endDatetime: `${dayOf(s.endMin)} ${hm(s.endMin)}` }));
-    try {
-      const card = await venue.pickTimeCard(credential, items);
-      if (card) timeCardUid = card.uidTxt || String(card.uid);
-      else { console.log(`[scavenger] task=${task.id} ${venue.meta.name} 无可用次卡, 跳过次卡直接 ${payCodes.fallback != null ? "余额" : "失败"}`); primaryCode = payCodes.fallback; }
-    } catch (e) { console.warn(`[scavenger] task=${task.id} 次卡查询失败: ${String(e?.message || e)}`); primaryCode = payCodes.fallback; }
-  }
-  const buildTarget = (payCode) => ({
+  const targetFor = (code, timeCardUid = null) => ({
     date: task.date,
     courts: chain.map((s) => ({ court: s.court, courtUid: s.uid, time: s.time, cost: s.cost })),
-    ext: { payMethod: payCode, totalCost, ...(timeCardUid && timecardCode != null && Number(payCode) === Number(timecardCode) ? { venueTimeCardUid: timeCardUid } : {}) },
+    ext: { payMethod: code, totalCost, ...(timeCardUid ? { venueTimeCardUid: timeCardUid } : {}) },
   });
-  // 支付语义名(码→balance/wechat), 日志与消息用
-  const payName = (code) => (code != null && code === venue.payments?.balance ? "balance" : code === venue.payments?.wechat ? "wechat" : code === venue.payments?.timecard ? "timecard" : String(code));
-  const dispatch = async (payCode, via) => {
-    try {
-      return await enqueueBooking(venue.meta.id, profile, async () => {
-        console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")} via=${via}`);
-        return venue.grab(buildTarget(payCode), credential);
-      });
-    } catch (error) { return { success: false, message: String(error?.message || error) }; }
+  const cardItems = () => {
+    const hm = (min) => `${String(Math.floor((min % 1440) / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}:00`;
+    const dayOf = (min) => min >= 1440 ? new Date(Date.parse(task.date + "T00:00:00Z") + 86400000).toISOString().slice(0, 10) : task.date;
+    return chain.map((s) => ({ classroomUid: s.uid, beginDatetime: `${dayOf(s.beginMin)} ${hm(s.beginMin)}`, endDatetime: `${dayOf(s.endMin)} ${hm(s.endMin)}` }));
   };
-  let result = await dispatch(primaryCode, payName(primaryCode));
-  let switchedPay = false;
-  // 主支付失败(余额不足/次卡次数不足等支付侧原因)且备选支付可用 → 自动切换重下(同 slot, 微信锁场等待人工付款)
-  const primaryClass = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
-  if (result?.success !== true && payCodes.fallback != null && primaryClass !== "rate-limited" && primaryClass !== "success") {
-    console.log(`[scavenger] task=${task.id} ${payName(primaryCode)} 下单失败(${String(result?.message || "").slice(0, 60)}), 切换 ${payName(payCodes.fallback)} 重试`);
-    const retry = await dispatch(payCodes.fallback, payName(payCodes.fallback));
-    if (retry?.success === true) {
-      switchedPay = true;
-      result = retry;
+  let result = null;
+  let chosenKind = null;
+  let finalTarget = null;
+  const skipped = [];
+  for (const step of paySteps) {
+    let target = targetFor(step.code);
+    if (step.kind === "timecard") {
+      try {
+        if (typeof venue.pickTimeCard === "function") {
+          const card = await venue.pickTimeCard(credential, cardItems());
+          if (!card) { skipped.push("次卡无可用卡"); console.log(`[scavenger] task=${task.id} ${venue.meta.name} 次卡无可用卡, 尝试下一支付方式`); continue; }
+          target = targetFor(step.code, card.uidTxt || String(card.uid));
+        } else if (typeof venue.prepareTarget === "function") {
+          target = await venue.prepareTarget(target, credential);
+        } else {
+          skipped.push("场馆未实现次卡准备");
+          continue;
+        }
+      } catch (error) {
+        skipped.push(`次卡准备失败: ${String(error?.message || error).slice(0, 80)}`);
+        console.warn(`[scavenger] task=${task.id} ${venue.meta.name} ${skipped[skipped.length - 1]}, 尝试下一支付方式`);
+        continue; // No booking request was sent, so trying the next method is safe.
+      }
     }
+    try {
+      result = await enqueueBooking(venue.meta.id, profile, async () => {
+        console.log(`[scavenger] task=${task.id} dispatch ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")} via=${step.kind}`);
+        return venue.grab(target, credential);
+      });
+    } catch (error) { result = { success: false, message: String(error?.message || error) }; }
+    if (result?.success === true) {
+      chosenKind = step.kind;
+      finalTarget = target;
+      break;
+    }
+    if (!canSwitchPayment(venue, result)) break; // Occupied, locked, rate-limited and uncertain responses are not payment failures.
+    console.log(`[scavenger] task=${task.id} ${step.kind} 支付失败(${String(result?.message || "").slice(0, 60)}), 尝试下一支付方式`);
   }
+  if (!result) result = { success: false, message: skipped.join("；") || "没有可用支付方式" };
+  const switchedPay = chosenKind != null && chosenKind !== paySteps[0]?.kind;
   const classification = (typeof venue.classifyGrabResult === "function" ? venue.classifyGrabResult(result) : classifyResult(result)) || "terminal";
   stats.attempts = (stats.attempts || 0) + 1;
   try { // 审计入 job_attempts, 与普通任务共用排查入口
@@ -446,14 +458,13 @@ async function bookSlots(task, venue, credential, chain, payCodes, stats) {
       stats.dailyBlocked = { ...(stats.dailyBlocked || {}), [venue.meta.id]: task.date };
       console.warn(`[scavenger] task=${task.id} ${venue.meta.name} 触发每日预约上限, 当天(${task.date})不再尝试该场馆`);
     }
-    // 关键流程日志: 最终下单失败(两种支付都试过)
+    // 关键流程日志: 最终下单失败(按顺序尝试了可用支付方式)
     console.warn(`[scavenger] task=${task.id} 下单失败 ${venue.meta.name} ${chain.map((s) => `${s.court} ${s.time}`).join(" + ")}: ${String(result?.message || "").slice(0, 80)}`);
     if (classification === "rate-limited") applyCooldown(profile.scopeKey, 10000);
     return null;
   }
   const timeRange = `${chain[0].time}-${String(Math.floor(chain[chain.length - 1].endMin / 60)).padStart(2, "0")}:${String(chain[chain.length - 1].endMin % 60).padStart(2, "0")}`;
   // 实际下单成功的 target(含最终使用的支付码), 供释放检测比对
-  const finalTarget = buildTarget(switchedPay ? payCodes.fallback : primaryCode);
   const booking = {
     venueId: venue.meta.id, venueName: venue.meta.name,
     courts: chain.map((s) => ({ court: s.court, time: s.time })),

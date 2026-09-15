@@ -14,6 +14,7 @@ import { createScavengeTask, getScavengeTask, listScavengeTasks, listArchivedSca
 import { collectOwners } from "./jobs.js";
 import { courtTypeLabel, COURT_TYPES } from "../core/courtTypes.js";
 import { readyCache } from "../core/scheduler.js";
+import { normalizePayOrder, payStepsForVenue } from "../core/scavengePayments.js";
 
 // 校验 courtTypes: 非空, 且每个选中场馆至少支持其中一种类型(否则该场馆永远订不到, 提前拦截)
 function validateCourtTypes(venueIds, courtTypes) {
@@ -53,7 +54,7 @@ function presentTask(task) {
     id: task.id, userId: task.userId, venueIds: task.venueIds, date: task.date, startTime: task.startTime, endTime: task.endTime,
     courtTypes: task.courtTypes, courtTypeLabel: task.courtTypes.map((t) => courtTypeLabel(t) || t).join("+"),
     allowCombine: task.allowCombine, allowPartial: task.allowPartial, allowNonrefundable: task.allowNonrefundable,
-    maxTotalCost: task.maxTotalCost, payKind: task.payKind, status: task.status, stats: task.stats,
+    maxTotalCost: task.maxTotalCost, payKind: task.payKind, payOrder: task.payOrder, status: task.status, stats: task.stats,
     createdAt: task.createdAt, updatedAt: task.updatedAt, bookings,
     spent, remainingBudget: Math.max(0, task.maxTotalCost - spent),
     coveredMinutes, totalMinutes, progress: `${coveredMinutes}/${totalMinutes} 分钟`,
@@ -96,7 +97,7 @@ router.get("/", (req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { venueIds, date, startTime, endTime, courtTypes, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind } = req.body || {};
+  const { venueIds, date, startTime, endTime, courtTypes, allowCombine, allowPartial, allowNonrefundable, maxTotalCost, payKind, payOrder } = req.body || {};
   const typeCheck = validateCourtTypes(venueIds, courtTypes);
   if (typeCheck.error) return res.status(400).json({ error: typeCheck.error });
   if (!Array.isArray(venueIds) || !venueIds.length) return res.status(400).json({ error: "请至少选择一个球场" });
@@ -104,13 +105,11 @@ router.post("/", (req, res) => {
   const startMin = hhmmToMinutes(startTime), endMin = hhmmToMinutes(endTime);
   if (startMin == null || endMin == null) return res.status(400).json({ error: "时间格式无效(HH:MM)" });
   if (endMin === startMin) return res.status(400).json({ error: "结束时间需晚于开始时间" });
-  // 支付优先级: timecard-first(次卡优先, 不足自动换余额) / balance-first(余额优先,不足自动切换微信锁场) / wechat-first; 兼容旧单值
-  const normalizedPay = payKind === "wechat-first" || payKind === "wechat" ? "wechat-first" : payKind === "timecard-first" ? "timecard-first" : payKind === "balance-first" || payKind === "balance" ? "balance-first" : null;
-  if (!normalizedPay) return res.status(400).json({ error: "支付方式无效" });
-  if (normalizedPay === "timecard-first") {
-    const noTimecard = [...new Set(venueIds)].map((vid) => getVenue(vid)).filter((v) => v && v.payments?.timecard == null);
-    if (noTimecard.length) return res.status(400).json({ error: `以下球场不支持次卡支付: ${noTimecard.map((v) => v.name).join("、")}` });
-  }
+  // New clients send an ordered list; legacy payKind remains supported for existing clients.
+  const normalizedPay = payOrder != null ? `${payOrder?.[0]}-first` : payKind === "wechat-first" || payKind === "wechat" ? "wechat-first" : payKind === "timecard-first" ? "timecard-first" : payKind === "balance-first" || payKind === "balance" ? "balance-first" : null;
+  if (!["timecard-first", "balance-first", "wechat-first"].includes(normalizedPay)) return res.status(400).json({ error: "支付方式无效" });
+  const normalizedOrder = normalizePayOrder(payOrder, normalizedPay);
+  if (!normalizedOrder) return res.status(400).json({ error: "支付顺序需由不重复的次卡、余额、微信组成" });
   const cost = Number(maxTotalCost);
   if (!Number.isFinite(cost) || cost <= 0) return res.status(400).json({ error: "最高接受价格无效" });
   // 日期窗口: 不早于今天(北京), 最多提前 14 天
@@ -118,20 +117,18 @@ router.post("/", (req, res) => {
   const diffDays = Math.round((Date.parse(date + "T00:00:00Z") - Date.parse(bjToday + "T00:00:00Z")) / 86400000);
   if (diffDays < 0) return res.status(400).json({ error: "日期不能早于今天" });
   if (diffDays > 14) return res.status(400).json({ error: "最多提前 14 天" });
-  // 球场校验: 存在 + 支持 listSlots + 至少支持优先级里的一种支付(主支付缺失时用备选)
-  const primaryKind = normalizedPay === "wechat-first" ? "wechat" : normalizedPay === "timecard-first" ? "timecard" : "balance";
-  const fallbackKind = normalizedPay === "wechat-first" ? "balance" : normalizedPay === "timecard-first" ? "balance" : "wechat";
+  // Every selected venue needs at least one selected payment method; unsupported methods are skipped per venue.
   const unsupported = [];
   for (const venueId of [...new Set(venueIds)]) {
     const venue = getVenue(venueId);
     if (!venue || typeof venue.listSlots !== "function") unsupported.push(`${venueId}(不支持查询)`);
-    else if (venue.payments?.[primaryKind] == null && venue.payments?.[fallbackKind] == null) unsupported.push(`${venue.name}(不支持任何支付方式)`);
+    else if (!payStepsForVenue(normalizedOrder, venue.payments).length) unsupported.push(`${venue.meta.name}(不支持所选支付方式)`);
   }
   if (unsupported.length) return res.status(400).json({ error: "以下球场不可用: " + unsupported.join("、") });
   const created = createScavengeTask(req.user.id, {
     venueIds: [...new Set(venueIds)], date, startTime, endTime, courtTypes: typeCheck.list,
     allowCombine: allowCombine !== false, allowPartial: allowPartial !== false, allowNonrefundable: allowNonrefundable !== false,
-    maxTotalCost: cost, payKind: normalizedPay,
+    maxTotalCost: cost, payKind: normalizedPay, payOrder: normalizedOrder,
   });
   if (created?.error) return res.status(400).json({ error: created.error });
   res.json({ ok: true, task: presentTask(created) });
@@ -167,7 +164,7 @@ router.post("/:id/archive", (req, res) => {
 
 // 编辑进行中的捡漏任务(时段/规则/预算/支付优先级/场地类型)
 router.put("/:id", (req, res) => {
-  const body = req.body || {};
+  let body = req.body || {};
   const row = db.prepare("SELECT venue_ids_json FROM scavenge_tasks WHERE id=? AND user_id=?").get(req.params.id, req.user.id);
   if (row && body.courtTypes !== undefined) {
     let vids = [];
