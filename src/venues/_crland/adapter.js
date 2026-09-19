@@ -79,6 +79,8 @@ export function createCrlandAdapter(cfg) {
     if (status !== 200 || json?.code !== 200) throw new Error(json?.text || `HTTP ${status}`);
     const r = json.result || {};
     const nameByUuid = Object.fromEntries((r.fieldList || []).map((f) => [f.fieldUuid, f.fieldName]));
+    // yml courts[].name 覆盖接口名(展示别名, 如"1号场深圳"); 未配置的场地保持接口返回名
+    const aliasByUuid = Object.fromEntries((cfg.courts || []).map((c) => [String(c.uid), c.name]));
     const slots = [];
     for (const row of r.matrix || []) {
       for (const cell of row.matrix || []) {
@@ -86,7 +88,7 @@ export function createCrlandAdapter(cfg) {
         if (!/T\d{2}:\d{2}/.test(begin)) continue;
         slots.push({
           uid: String(cell.fieldUuid),
-          court: nameByUuid[cell.fieldUuid] || cell.fieldUuid,
+          court: aliasByUuid[String(cell.fieldUuid)] || nameByUuid[cell.fieldUuid] || cell.fieldUuid,
           fieldTimeUuid: String(cell.fieldTimeUuid || ""),
           begin: String(cell.startTime || ""),
           canAppoint: cell.isAbleReserve === true && Number(cell.price) > 0,

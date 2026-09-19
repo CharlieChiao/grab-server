@@ -28,16 +28,16 @@ releaseRetry:
   defaultMinIntervalMs: 2000
   maxAttempts: 6
 courts:
-  - name: 网球1号场
+  - name: 1号场深圳
     type: tennis
     uid: 8f2068ee3def11f1ba41b2d27276c64b
-  - name: 网球2号场
+  - name: 2号场广州
     type: tennis
     uid: 8f2301003def11f1ba41b2d27276c64b
-  - name: 网球3号场
+  - name: 3号场香港
     type: tennis
     uid: 8f23eb623def11f1ba41b2d27276c64b
-  - name: 网球4号场
+  - name: 4号场澳门
     type: tennis
     uid: 8f24d5c43def11f1ba41b2d27276c64b
 credentialSchema:
