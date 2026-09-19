@@ -4,8 +4,10 @@
  *
  * 适配器契约(模板, 参考 venues/picklepop):
  *  必须: meta{id,name,raw=venue.yml解析结果} / ready(cred)→{ok,detail} 凭证有效性 / grab(target,cred) 下单
- *        meta.raw 中的公开字段(advanceDays/release/bookingHours/courts)注册时自动展开到 meta 顶层供前端消费,
+ *        meta.raw 中的公开字段(advanceDays/release/bookingHours/courts/targetCostOptional)注册时自动展开到 meta 顶层供前端消费,
  *        适配器无需逐字段手工抄写(backend/capture 等敏感段只保留在 raw)
+ *        targetCostOptional:true — yml 声明项: 下单请求不带金额(场馆按场次实际计价, 如 crland), 前端"场次总价"放行留空;
+ *        未声明的球场(如银豹 combinationPayments.cost)下单必须带金额, 价格必填
  *  可选: listSlots(query,cred)→[{uid,court,begin,canAppoint,cost}] 场次查询
  *        slot 须归一化到该形状(cost=场次价格, 供参考价/释放轮询复用)
  *        classifyGrabResult(result) 风控分类 / preheat / buildGrabRequest+fireGrab 精度优化
