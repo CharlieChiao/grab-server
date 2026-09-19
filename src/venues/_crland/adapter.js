@@ -10,6 +10,7 @@
  *   POST /order/client/order/bus/detail             订单详情(单查)
  */
 import { Pool } from "undici";
+import { constants as cryptoConstants } from "node:crypto";
 
 export function createCrlandAdapter(cfg) {
   const B = cfg.backend;
@@ -21,7 +22,11 @@ export function createCrlandAdapter(cfg) {
     pipelining: 1,
     keepAliveTimeout: 60 * 1000,
     keepAliveMaxTimeout: 10 * 60 * 1000,
-    connect: { timeout: 8000 },
+    connect: {
+      timeout: 8000,
+      // 未来荟服务器为老式 TLS 配置(legacy renegotiation), OpenSSL3 默认拒绝握手, 需显式放行
+      secureOptions: cryptoConstants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION,
+    },
   });
 
   function headers(cred) {
