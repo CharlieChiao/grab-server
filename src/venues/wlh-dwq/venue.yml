@@ -1,0 +1,62 @@
+id: wlh-dwq
+name: 未来荟·大湾区文化体育中心
+desc: 华润未来荟(crland), 4 片室内网球场, 微信支付
+backend:
+  base: https://wlhmobile.crland.com.cn
+  projectUuid: 0ddda9c33d4e11f1b51c2273436a3e4e
+  fieldAreaUuid: cec42d973dee11f1b51c2273436a3e4e   # 室内网球场地
+# 可订窗口实测 3 天(今天+明天+后天); 放场推测为每天 09:00 放出后天场次(待校准)
+advanceDays:
+  tennis: 3
+bookableDays: 3
+release:
+  timezone: Asia/Shanghai
+  rules:
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 2
+      at: '09:00:00.000'
+bookingHours:
+  start: '09:00'
+  end: '21:00'
+  slotMinutes: 60
+refundPolicy:
+  nonRefundableHours: 24
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 2000
+  maxAttempts: 6
+courts:
+  - name: 网球1号场
+    type: tennis
+    uid: 8f2068ee3def11f1ba41b2d27276c64b
+  - name: 网球2号场
+    type: tennis
+    uid: 8f2301003def11f1ba41b2d27276c64b
+  - name: 网球3号场
+    type: tennis
+    uid: 8f23eb623def11f1ba41b2d27276c64b
+  - name: 网球4号场
+    type: tennis
+    uid: 8f24d5c43def11f1ba41b2d27276c64b
+credentialSchema:
+  - key: Authorization
+    label: 登录令牌
+    desc: '从小程序抓包获取(Authorization: Wechat JWT)；有效期约 1 年，ready 检测即验证。'
+capture:
+  enabled: true
+  hosts:
+    - wlhmobile.crland.com.cn
+  paths:
+    - '/business/*'
+    - '/order/*'
+    - '/member/*'
+    - '/marketing/*'
+  headers:
+    - Authorization
+  tasks:
+    - id: identity
+      label: 身份凭证
+      source: credential
+      required: true
+      maxAgeHours: 8760

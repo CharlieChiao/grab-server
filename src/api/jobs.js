@@ -11,6 +11,7 @@ const router = express.Router();
 
 export function paymentParams(job) {
   let script = job?.result?.raw?.result?.script; // 银豹: raw.result.script
+  if (!script && job?.result?.raw?.result?.paymentElements) return job.result.raw.result.paymentElements; // 华润未来荟: 微信 JSAPI 参数原样
   if (!script) script = job?.result?.raw?.data?.result?.jsConfig; // CRMEB: raw.data.result.jsConfig
   if (typeof script === "string") {
     try { script = JSON.parse(script); } catch {
