@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { db, nowIso } from "./database.js";
 import { paymentKind } from "./payCodes.js";
 import { archiveJob, updateJob } from "./jobStore.js";
+import { notifyJobResult } from "./notifications.js";
 
 const rowToGroup = (row) => row && ({
   uid: row.uid,
@@ -93,6 +94,35 @@ export function stopPendingSiblingsAfterAnySuccess(groupUid, succeededJobId) {
   return stoppedJobs;
 }
 
+// any 策略组的成员失败时, 暂缓通知: 此时组可能还有任务在跑(含成功可能), 立即发"预约失败"会误导。
+// 暂缓到组终结(finalizeAndRepeatGroup)统一发送: 组成功 → "组内已订到", 组失败 → "预约失败"。
+// 传入的 job 须已 archive 到 job_history。
+export function deferFailureNotification(job) {
+  if (!job.groupUid) return false;
+  const group = db.prepare("SELECT success_policy FROM task_groups WHERE uid=? AND status='active'").get(job.groupUid);
+  if (!group || group.success_policy !== "any") return false;
+  // 组内已无活跃任务(本任务是最后完成者): finalize 即将给出组结果, 无需暂缓
+  if (!db.prepare("SELECT 1 FROM jobs WHERE group_uid=? LIMIT 1").get(job.groupUid)) return false;
+  db.prepare("UPDATE job_history SET notify_pending=1 WHERE id=?").run(job.id);
+  console.log(`[notify] job=${job.id} 失败通知暂缓, 待组 ${job.groupUid.slice(0, 8)} 终结后发送`);
+  return true;
+}
+
+// 组终结时补发暂缓的失败通知(按组最终结果决定文案)
+function flushDeferredNotifications(groupUid, groupSucceeded) {
+  const deferred = db.prepare("SELECT * FROM job_history WHERE group_uid=? AND notify_pending=1").all(groupUid);
+  for (const member of deferred) {
+    let target = {};
+    try { target = JSON.parse(member.target_json); } catch {}
+    notifyJobResult(
+      { userId: member.user_id, venueId: member.venue_id, status: member.status, target, result: null },
+      { outcome: groupSucceeded ? "组内已订到" : undefined },
+    ).catch((e) => console.warn("[notification]", e.message));
+    db.prepare("UPDATE job_history SET notify_pending=NULL WHERE id=?").run(member.id);
+  }
+  if (deferred.length) console.log(`[notify] 组 ${groupUid.slice(0, 8)} 终结(${groupSucceeded ? "成功" : "失败"}), 补发 ${deferred.length} 条暂缓通知`);
+}
+
 const plusWeek = (value) => {
   if (!value) return null;
   const date = new Date(value);
@@ -115,6 +145,7 @@ export function finalizeAndRepeatGroup(groupUid) {
   const members = db.prepare("SELECT * FROM job_history WHERE group_uid=? ORDER BY created_at").all(groupUid);
   if (!members.length) return null;
   const succeeded = group.success_policy === "any" ? members.some((x) => x.status === "done") : members.every((x) => x.status === "done");
+  flushDeferredNotifications(groupUid, succeeded);
   const now = nowIso();
   if (!group.repeat_weekly) {
     db.prepare("UPDATE task_groups SET status=?,updated_at=? WHERE uid=?").run(succeeded ? "completed" : "failed", now, groupUid);

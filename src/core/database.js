@@ -67,6 +67,7 @@ function ensureTableColumn(table, name, definition) {
   }
 }
 ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(旧单值列, 已被 court_types_json 取代)
+ensureTableColumn("job_history", "notify_pending", "INTEGER"); // 暂缓的失败通知(any 策略组, 等组终结按组结果决定文案)
 ensureTableColumn("scavenge_tasks", "pay_order_json", "TEXT");
 ensureTableColumn("scavenge_tasks", "court_types_json", "TEXT"); // 捡漏任务限定的场地类型数组(tennis/pickle/...), 至少一项
 ensureTableColumn("scavenge_tasks", "archived", "INTEGER NOT NULL DEFAULT 0"); // 归档(进入历史区), 停止/订满后可归档

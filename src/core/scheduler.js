@@ -5,7 +5,7 @@ import { enqueueBooking, applyCooldown } from "./requestLimiter.js";
 import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
-import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess } from "./jobGroups.js";
+import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess, deferFailureNotification } from "./jobGroups.js";
 import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable } from "./paymentLifecycle.js";
 import { normalizeFailure } from "./failureReasons.js";
 
@@ -311,12 +311,16 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
     console[result?.success ? "log" : "warn"](`[grab] job=${job.id} venue=${job.venueId} ${outcome} elapsedMs=${elapsedMs}${result?.orderId ? ` orderId=${result.orderId}` : ""} message=${String(result?.message || "").slice(0, 160)}`);
     const completed = updateJob(job.id, { status: result?.success ? "done" : "failed", result: { ...result, elapsedMs } });
     if (completed) {
-      notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
       archiveJob(completed.id);
       if (result?.success) {
+        notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
         for (const stopped of stopPendingSiblingsAfterAnySuccess(completed.groupUid, completed.id)) {
           notifyJobResult(stopped).catch(() => {});
         }
+      } else if (deferFailureNotification(completed)) {
+        // any 策略组仍有任务在跑: 暂缓失败通知, 组终结时按组结果发送(组成功→"组内已订到")
+      } else {
+        notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
       }
       finalizeAndRepeatGroup(completed.groupUid);
     }
@@ -324,7 +328,11 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
     const message = `调度异常: ${String(error?.message || error)}`;
     console.error(`[grab] job=${job.id} ${message}`);
     const completed = updateJob(job.id, { status: "failed", result: { success: false, message, elapsedMs: Date.now() - startedMs } });
-    if (completed) { notifyJobResult(completed).catch((notifyError) => console.warn("[notification]", notifyError.message)); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
+    if (completed) {
+      archiveJob(completed.id);
+      if (!deferFailureNotification(completed)) notifyJobResult(completed).catch((notifyError) => console.warn("[notification]", notifyError.message));
+      finalizeAndRepeatGroup(completed.groupUid);
+    }
   } finally { scheduled.delete(job.id); }
 }
 
