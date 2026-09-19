@@ -60,12 +60,17 @@ export function archiveJob(id) {
     return rowToJob({ ...row, archived_at: archivedAt });
   } catch (error) { try { db.exec("ROLLBACK"); } catch {} throw error; }
 }
-// 编辑待执行任务的开抢时间/价格/任务组/兜底开关(仅 pending 状态, 场地/时段变更需重建任务)
-export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance, payMethod } = {}) {
+// 编辑待执行任务的目标(场地/时段/日期)/价格/任务组/兜底开关(仅 pending 状态)
+// fireAt 由球场放场规则推算(API 层按新目标重推后传入), 不接受手动指定
+export function editJob(id, userId, { fireAt, cost, groupUid, fallbackBalance, payMethod, target: newTarget } = {}) {
   const row = db.prepare("SELECT * FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
   if (!row) return { error: "not found" };
   if (row.status !== "pending") return { error: "仅待执行任务可编辑" };
-  const target = JSON.parse(row.target_json);
+  let target = JSON.parse(row.target_json);
+  if (newTarget !== undefined && newTarget !== null) {
+    // 整体替换抢订目标(场地/时段/日期); 原支付配置(ext)中未被新值覆盖的字段保留
+    target = { ...newTarget, ext: { ...(target.ext || {}), ...(newTarget.ext || {}) } };
+  }
   if (payMethod !== undefined && payMethod !== null) {
     // 支付码必须是本场适配器 payments 声明的合法码(委托授权的允许范围由 API 层校验)
     const venue = getVenue(row.venue_id);

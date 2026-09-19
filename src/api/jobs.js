@@ -160,7 +160,8 @@ router.post("/:id/payment-confirmed", (req, res) => {
   res.json({ ok: true, job: presentJob(completed, req.user.id) });
 });
 router.put("/:id", (req, res) => {
-  const { fireAt, cost, groupUid, fallbackBalance, payMethod } = req.body || {};
+  // fireAt 不再接受手动修改: 开抢时刻由球场放场规则固定推算
+  const { target, cost, groupUid, fallbackBalance, payMethod } = req.body || {};
   // 委托任务改支付方式: 新支付方式必须在授权允许范围内(与创建时同规则)
   if (payMethod != null) {
     const job = getJob(req.params.id, req.user.id);
@@ -171,7 +172,26 @@ router.put("/:id", (req, res) => {
       if (!paymentType || !allowedPayments.includes(paymentType)) return res.status(403).json({ error: "授权方未允许该支付方式" });
     }
   }
-  const result = editJob(req.params.id, req.user.id, { fireAt, cost, groupUid, fallbackBalance, payMethod });
+  let finalFireAt;
+  if (target !== undefined && target !== null) {
+    // 替换抢订目标: 校验 + 按新目标重推开抢时刻(立即抢任务 fireAt 为 null 保持不变)
+    const err = validateTarget(target);
+    if (err) return res.status(400).json({ error: err });
+    const job = getJob(req.params.id, req.user.id);
+    if (!job) return res.status(404).json({ error: "not found" });
+    const venue = getVenue(job.venueId);
+    const bookableDays = Number(venue.meta?.bookableDays);
+    if (Number.isFinite(bookableDays) && bookableDays > 0) {
+      const bjToday = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const diffDays = Math.round((Date.parse(target.date + "T00:00:00Z") - Date.parse(bjToday + "T00:00:00Z")) / 86400000);
+      if (diffDays > bookableDays) return res.status(400).json({ error: `超出最大可预定范围(最多提前 ${bookableDays} 天)` });
+    }
+    if (job.fireAt) {
+      try { finalFireAt = autoFireAt(venue.meta, target); }
+      catch (e) { return res.status(400).json({ error: "cannot calculate fireAt: " + e.message }); }
+    }
+  }
+  const result = editJob(req.params.id, req.user.id, { fireAt: finalFireAt, target, cost, groupUid, fallbackBalance, payMethod });
   if (result.error) return res.status(result.error === "not found" ? 404 : 400).json({ error: result.error });
   res.json({ ok: true, job: presentJob(result.job, req.user.id) });
 });
