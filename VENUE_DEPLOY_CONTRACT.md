@@ -79,6 +79,8 @@ courts:                   # 场地清单(前端场地选择/统计/下单 courtU
   - name: 1号             # 展示名
     type: tennis          # 类型(pickle/tennis, 前端统计与放场规则匹配)
     uid: '119'            # 上游场地唯一标识(字符串), 下单与 slot 匹配的关键
+targetCostOptional: true  # 可选, 声明后前端"场次总价"可留空。适用于下单请求不带金额的场馆(如 crland 场馆按场次实际计价);
+                          # 未声明的场馆(如银豹 combinationPayments.cost 必填)价格必填
 credentialSchema:         # 凭证字段声明, ingest/ CourtCapture 按此组装存储
   - key: Authori-zation   # 上游凭证 header 名(区分大小写按实际)
     label: 登录令牌        # 前端展示
@@ -88,7 +90,7 @@ capture:                  # CourtCapture/bot 抓包配置(见 COURTCAPTURE_GUIDE
   enabled / hosts / paths / headers / discoveryPaths / tasks
 ```
 
-**meta 展开规则**: `advanceDays/release/bookingHours/courts` 四个公开字段由 venueRegistry 注册时自动从 `meta.raw` 展开到顶层(适配器显式声明优先), 前端直接读 `venue.courts` 等; `backend/capture` 等敏感段只保留在 `venue.raw`。
+**meta 展开规则**: `advanceDays/release/bookingHours/courts/targetCostOptional` 五个公开字段由 venueRegistry 注册时自动从 `meta.raw` 展开到顶层(适配器显式声明优先), 前端直接读 `venue.courts` 等; `backend/capture` 等敏感段只保留在 `venue.raw`。
 
 **slot 归一化形状**(listSlots 返回, 契约强约束):
 
