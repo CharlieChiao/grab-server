@@ -26,7 +26,7 @@
  *        failure{kind,classification,retryable,terminal,inspectSlots,message}, 核心层不解析场馆文案。
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
-const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts"];
+const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts", "targetCostOptional"];
 
 // meta.raw 公开字段自动展开到顶层(适配器显式声明优先), 新球场无需手工抄写 meta
 // courts[].type 经注册表归一(中文/别名 → 标准 key), 保证跨场馆类型可比

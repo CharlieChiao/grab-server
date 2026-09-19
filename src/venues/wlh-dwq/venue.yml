@@ -21,6 +21,8 @@ bookingHours:
   start: '09:00'
   end: '21:00'
   slotMinutes: 60
+# 下单请求不带金额(场馆按场次实际计价), 任务的"场次总价"可不填; 未声明的球场(如银豹)下单必须带金额
+targetCostOptional: true
 refundPolicy:
   nonRefundableHours: 24
 releaseRetry:
