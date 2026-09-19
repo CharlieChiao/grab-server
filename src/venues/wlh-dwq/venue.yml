@@ -5,7 +5,8 @@ backend:
   base: https://wlhmobile.crland.com.cn
   projectUuid: 0ddda9c33d4e11f1b51c2273436a3e4e
   fieldAreaUuid: cec42d973dee11f1b51c2273436a3e4e   # 室内网球场地
-# 可订窗口实测 3 天(今天+明天+后天); 放场推测为每天 09:00 放出后天场次(待校准)
+# 可订窗口实测 3 天(今天+明天+后天); 放场已实测确认(2026-09-20): 每个日期 D 的场次在 D-2 的 09:00 放出
+# (周日凌晨看不到周三场次, 周一 09:00 才放出; 抓包时周六可看 9-19/20/21 三天)
 advanceDays:
   tennis: 3
 bookableDays: 3
