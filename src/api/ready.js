@@ -82,9 +82,9 @@ router.get("/venues/:id/reference-price", async (req, res) => {
   if (!venue) return res.status(404).json({ error: "not found" });
   if (!date || !courtUids.length || !times.length) return res.status(400).json({ error: "date, courtUids and times are required" });
   if (typeof venue.listSlots !== "function") return res.status(501).json({ error: "venue slot pricing is not supported" });
-  const previousWeek = (value) => {
+  const daysBefore = (value, back) => {
     const [year, month, day] = value.split("-").map(Number);
-    const d = new Date(Date.UTC(year, month - 1, day - 7));
+    const d = new Date(Date.UTC(year, month - 1, day - back));
     return d.toISOString().slice(0, 10);
   };
   const summarize = (slots, sourceDate) => {
@@ -92,21 +92,39 @@ router.get("/venues/:id/reference-price", async (req, res) => {
     const prices = [];
     for (const uid of courtUids) for (const time of times) prices.push(map.get(`${uid}|${time}`) || 0);
     const selectedCourtReleased = (slots || []).some((slot) => courtUids.includes(String(slot.uid)));
-    return { sourceDate, released: (slots || []).length > 0, selectedCourtReleased, complete: prices.length > 0 && prices.every((price) => price > 0), total: prices.reduce((sum, price) => sum + price, 0) };
+    // 部分场馆(如 crland)只给"当前可约"的场次标价: 已订满/未放场/过期场次价格全为 0。
+    // complete=所选场次全有价, partial=部分有价(minPrice 供"¥x 起"提示)
+    const known = prices.filter((price) => price > 0);
+    return {
+      sourceDate, released: (slots || []).length > 0, selectedCourtReleased,
+      complete: prices.length > 0 && prices.every((price) => price > 0),
+      partial: known.length > 0 && known.length < prices.length,
+      minPrice: known.length ? Math.min(...known) : 0,
+      knownCount: known.length, totalCount: prices.length,
+      total: prices.reduce((sum, price) => sum + price, 0),
+    };
   };
   const ownerUserId = credentialOwner(req);
   if (!ownerUserId) return res.status(403).json({ error: "代理授权不存在或已过期" });
+  const cred = getCredential(req.params.id, ownerUserId);
+  // 目标日期查询: 未放场被拒(如 crland"最多可提前 3 天预定场地")时不能直接 502, 需落到历史回退
+  let result = null;
   try {
-    const cred = getCredential(req.params.id, ownerUserId);
-    const todaySlots = await venue.listSlots({ date }, cred);
-    const today = summarize(todaySlots, date);
-    if (today.selectedCourtReleased) return res.json({ ok: true, ...today, fallback: false });
-    const historicDate = previousWeek(date);
-    const historic = summarize(await venue.listSlots({ date: historicDate }, cred), historicDate);
-    res.json({ ok: true, ...historic, fallback: true });
-  } catch (error) {
-    res.status(502).json({ error: "查询参考价格失败", detail: String(error.message || error) });
+    const today = summarize(await venue.listSlots({ date }, cred), date);
+    if (today.complete || today.partial) result = { ...today, fallback: false };
+  } catch (e) { /* 未放场/未开放被拒: 历史回退 */ }
+  if (!result) {
+    // 逐级回退 7/14/21 天, 取第一个有价格的(订满日无价 → 更早)
+    for (const back of [7, 14, 21]) {
+      const historicDate = daysBefore(date, back);
+      try {
+        const historic = summarize(await venue.listSlots({ date: historicDate }, cred), historicDate);
+        if (historic.complete || historic.partial) { result = { ...historic, fallback: true }; break; }
+      } catch (e) { /* 继续更早回退 */ }
+    }
   }
+  if (!result) result = { sourceDate: null, released: false, selectedCourtReleased: false, complete: false, partial: false, minPrice: 0, knownCount: 0, totalCount: courtUids.length * times.length, total: 0 };
+  res.json({ ok: true, ...result });
 });
 // 已约场地列表(预约管理契约)
 router.get("/venues/:id/bookings", async (req, res) => {
