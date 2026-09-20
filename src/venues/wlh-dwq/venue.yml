@@ -5,8 +5,8 @@ backend:
   base: https://wlhmobile.crland.com.cn
   projectUuid: 0ddda9c33d4e11f1b51c2273436a3e4e
   fieldAreaUuid: cec42d973dee11f1b51c2273436a3e4e   # 室内网球场地
-# 放场: 每天 09:00 放出 3 天后(大后天)的场次; 例: 周三的场次在周日 09:00 放出
-# 可订窗口: 今天+明天+后天+大后天(每天 09:00 轮转新增一天)
+# 放场: 每天 09:00 放出 2 天后(后天)的场次(提前 48 小时); 例: 周二的场次在周日 09:00 放出
+# 可订窗口: 今天+明天+后天(每天 09:00 轮转新增一天); 大后天(+3)可提前创建任务, 开抢时刻自动排到其放场日 09:00
 advanceDays:
   tennis: 4
 bookableDays: 4
@@ -15,7 +15,7 @@ release:
   rules:
     tennis:
       mode: calendar-day-batch
-      calendarDaysBefore: 3
+      calendarDaysBefore: 2
       at: '09:00:00.000'
 bookingHours:
   start: '09:00'
