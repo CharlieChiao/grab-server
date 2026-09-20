@@ -6,10 +6,11 @@ backend:
   projectUuid: 0ddda9c33d4e11f1b51c2273436a3e4e
   fieldAreaUuid: cec42d973dee11f1b51c2273436a3e4e   # 室内网球场地
 # 放场: 每天 09:00 放出 2 天后(后天)的场次(提前 48 小时); 例: 周二的场次在周日 09:00 放出
-# 可订窗口: 今天+明天+后天(每天 09:00 轮转新增一天); 大后天(+3)可提前创建任务, 开抢时刻自动排到其放场日 09:00
+# 可订/浏览 14 天: 抢订本就是提前排队, 后天与 14 天后无本质区别; 远期场次查询被场馆拒绝时前端显示为可选(未放场),
+# fireAt 自动排到该场次放场日(目标日期-2 天)的 09:00
 advanceDays:
-  tennis: 4
-bookableDays: 4
+  tennis: 14
+bookableDays: 14
 release:
   timezone: Asia/Shanghai
   rules:
