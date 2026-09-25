@@ -24,6 +24,8 @@ bookingHours:
   slotMinutes: 60
 # 下单请求不带金额(场馆按场次实际计价), 任务的"场次总价"可不填; 未声明的球场(如银豹)下单必须带金额
 targetCostOptional: true
+# 待支付窗口: 场馆约 6 分钟自动取消未付款订单(实测 09:00 下单 09:06:01 取消), 系统超时判定对齐该窗口
+paymentTimeoutMinutes: 6
 refundPolicy:
   nonRefundableHours: 24
 releaseRetry:

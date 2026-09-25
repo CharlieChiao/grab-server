@@ -9,8 +9,26 @@ import { getActiveDelegation } from "./delegations.js";
 export const PAYMENT_TIMEOUT_MINUTES = 15;
 // listSlots 是查询接口, releaseProbe 校准以 250ms 间隔探测都未触发限流, 1s 轮询安全
 const PAYMENT_POLL_MS = 1000;
+// 订单状态查询(有真实支付状态接口的场馆)节流: 每 10s 一次, 避免 1s 轮询打爆订单接口
+const STATUS_CHECK_MS = 10000;
 const polling = new Set();
 const lastPolledAt = new Map();
+const lastStatusCheckedAt = new Map();
+
+// 支付窗口按场馆: 部分场馆(如 crland)约 6 分钟自动取消未付订单, 全局 15 分钟会迟到 9 分钟才判失败
+function paymentTimeoutMinutes(job) {
+  const venue = getVenue(job.venueId);
+  const minutes = Number(venue?.meta?.raw?.paymentTimeoutMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : PAYMENT_TIMEOUT_MINUTES;
+}
+
+// 适配器支付状态契约: paid(订单完成, 自动确认成功) / cancelled(场馆已取消, 立即判失败) / pending / null(不支持或查询失败)
+async function checkVenuePaymentStatus(job) {
+  const venue = getVenue(job.venueId);
+  if (typeof venue?.checkPaymentStatus !== "function") return null;
+  try { return await venue.checkPaymentStatus(getCredential(job.venueId, job.userId), job.result); }
+  catch { return null; }
+}
 
 // 抢订成功且适配器声明"需人工支付"时进入待支付窗口(委托与非委托任务均适用), 不关心具体支付方式/支付码
 export function requiresManualPayment(job, result) {
@@ -18,8 +36,9 @@ export function requiresManualPayment(job, result) {
 }
 
 export function markAwaitingPayment(job, result, elapsedMs, now = Date.now()) {
-  const timeoutMs = PAYMENT_TIMEOUT_MINUTES * 60 * 1000;
-  return updateJob(job.id, { status: "awaiting_payment", result: { ...result, success: null, message: "订单已创建，等待本人微信支付", elapsedMs, paymentStatus: "pending", paymentStartedAt: new Date(now).toISOString(), paymentExpiresAt: new Date(now + timeoutMs).toISOString(), paymentTimeoutMinutes: PAYMENT_TIMEOUT_MINUTES } });
+  const timeoutMinutes = paymentTimeoutMinutes(job);
+  const timeoutMs = timeoutMinutes * 60 * 1000;
+  return updateJob(job.id, { status: "awaiting_payment", result: { ...result, success: null, message: "订单已创建，等待本人微信支付", elapsedMs, paymentStatus: "pending", paymentStartedAt: new Date(now).toISOString(), paymentExpiresAt: new Date(now + timeoutMs).toISOString(), paymentTimeoutMinutes: timeoutMinutes } });
 }
 
 export function finishPayment(jobId, now = Date.now()) {
@@ -148,6 +167,23 @@ export async function pollAwaitingPayments(now = Date.now()) {
     polling.add(job.id);
     lastPolledAt.set(job.id, now);
     try {
+      // 订单真实状态检查(有该契约的场馆): 已付款 → 自动确认成功; 场馆已取消 → 立即判失败(不等超时)
+      if (now - (lastStatusCheckedAt.get(job.id) || 0) >= STATUS_CHECK_MS) {
+        lastStatusCheckedAt.set(job.id, now);
+        const paymentState = await checkVenuePaymentStatus(job);
+        if (paymentState === "paid") {
+          const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认（订单状态自动确认）", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
+          if (completed) { notifyJobResult(completed).catch(() => {}); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
+          continue;
+        }
+        if (paymentState === "cancelled") {
+          const baseMessage = `场馆已取消订单（未在支付窗口内完成付款）`;
+          if (fallbackEnabled(job)) { await fallbackBalanceBooking(job, baseMessage, now); continue; }
+          const cancelled = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: baseMessage, paymentStatus: "released", paymentElapsedMs: paymentElapsedMs(job, now) } });
+          if (cancelled) { notifyJobResult(cancelled).catch(() => {}); archiveJob(cancelled.id); finalizeAndRepeatGroup(cancelled.groupUid); }
+          continue;
+        }
+      }
       const slots = await venue.listSlots({ date: job.target?.date }, getCredential(job.venueId, job.userId));
       if (targetSlotsAvailable(job.target, slots)) {
         if (fallbackEnabled(job)) await fallbackBalanceBooking(job, releasedBaseMessage(job, now), now);
@@ -190,6 +226,13 @@ export async function expireAwaitingPayments(now = Date.now()) {
     if (job.status !== "awaiting_payment") continue;
     const expiresAt = Date.parse(job.result?.paymentExpiresAt || "");
     if (Number.isFinite(expiresAt) && expiresAt > now) continue;
+    // 判超时前最后确认一次订单真实状态: 临界付款不再误判失败
+    const finalState = await checkVenuePaymentStatus(job);
+    if (finalState === "paid") {
+      const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认（订单状态自动确认）", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
+      if (completed) { expired.push(completed); finishAndArchive(completed); }
+      continue;
+    }
     const baseMessage = `支付超时（实际等待 ${formatWait(paymentElapsedMs(job, now))} 未完成付款）`;
     if (fallbackEnabled(job)) { await fallbackBalanceBooking(job, baseMessage, now); continue; }
     const completed = updateJob(job.id, { status: "failed", result: { ...job.result, success: false, message: baseMessage, paymentStatus: "timeout", paymentElapsedMs: paymentElapsedMs(job, now), paymentTimedOutAt: new Date(now).toISOString() } });

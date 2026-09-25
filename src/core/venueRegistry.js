@@ -26,6 +26,9 @@
  *        —— 新球场接入次卡类支付只需实现 payments.timecard + prepareTarget, 上层逻辑零改动
  *        failureReasons{rules:[...]} 失败原因声明; 注册中心自动提供 classifyFailure(result) 并为失败结果附加
  *        failure{kind,classification,retryable,terminal,inspectSlots,message}, 核心层不解析场馆文案。
+ *        checkPaymentStatus(cred,result)→"paid"|"cancelled"|"pending"|null 支付状态契约(待支付窗口用):
+ *        result 为下单返回(含 raw), 依据场馆订单详情判定; paid→自动确认成功, cancelled→立即判失败,
+ *        null/未实现→回退场次释放轮询+超时判定。yml 的 paymentTimeoutMinutes 声明场馆真实支付窗口。
  *  下单结果: success=true 时若需人工支付(如微信), 附 requiresManualPayment:true + orderId, 服务层自动进入待支付窗口
  */
 const META_PUBLIC_FIELDS = ["logo", "desc", "advanceDays", "bookableDays", "release", "bookingHours", "courts", "targetCostOptional"];

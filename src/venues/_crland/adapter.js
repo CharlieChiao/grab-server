@@ -142,6 +142,21 @@ export function createCrlandAdapter(cfg) {
     return { success: false, message: (json && (json.text || json.message || `code=${json.code}`)) || `下单失败(HTTP ${status})`, raw: json };
   }
 
+  // 支付状态查询契约: 轮询/超时判定前确认订单真实状态, 避免"已付款仍判失败"或"已取消傻等超时"
+  // 返回 "paid"(订单完成) / "cancelled"(场馆已取消) / "pending"(待支付) / null(查询失败, 调用方按原逻辑处理)
+  async function checkPaymentStatus(cred, result) {
+    try {
+      const orderUuid = result?.raw?.result?.orderBusUuid || result?.raw?.orderBusUuid;
+      if (!orderUuid) return null;
+      const { status, json } = await post("/order/client/order/bus/detail", cred, { orderUuid, projectUuid: B.projectUuid }, 8000);
+      if (status !== 200 || json?.code !== 200) return null;
+      const s = String(json.result?.orderStatus || "");
+      if (/CANCEL/i.test(s)) return "cancelled";
+      if (/COMPLETE|PAID|PAY|FINISH/i.test(s)) return "paid";
+      return "pending";
+    } catch { return null; }
+  }
+
   // 取消(取消支付即释放场次); uid 为下单返回的 orderPayUuid
   async function cancelBooking(cred, orderPayUuid) {
     const { status, json } = await post("/order/client/order/pay/cancel", cred, { orderPayUuid: String(orderPayUuid), projectUuid: B.projectUuid });
@@ -159,7 +174,7 @@ export function createCrlandAdapter(cfg) {
   }
 
   return {
-    meta, riskProfile, ready, grab, listSlots, cancelBooking, classifyGrabResult,
+    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, classifyGrabResult,
     payments: { wechat: "wxMini" },
   };
 }
