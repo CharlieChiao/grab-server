@@ -143,32 +143,36 @@ export function createCrlandAdapter(cfg) {
   }
 
   // 支付状态查询契约: 轮询/超时判定前确认订单真实状态, 避免"已付款仍判失败"或"已取消傻等超时"
-  // 返回 "paid"(订单完成) / "cancelled"(场馆已取消) / "pending"(待支付) / null(查询失败, 调用方按原逻辑处理)
-  // 实测(2026-09-25): 已支付订单会转出业务订单模块——detail 报"无权查看/不存在"且 bus/list 不再列出;
-  // 已取消订单仍留在列表(detail 可查 CANCELLED)。以此区分三种终态。
+  // 返回 "paid"(orderStatus=PAID) / "cancelled"(orderStatus=CANCELLED) / "pending"(待支付) / null(查询失败, 调用方按原逻辑处理)
+  // 注意: 查询必须用任务下单时的同一凭证(订单 owner), 凭证不匹配时 detail 报"无权查看"——此时不可武断判定, 返回 null
   async function checkPaymentStatus(cred, result) {
     try {
       const orderUuid = result?.raw?.result?.orderBusUuid || result?.raw?.orderBusUuid;
       if (!orderUuid) return null;
       const { status, json } = await post("/order/client/order/bus/detail", cred, { orderUuid, projectUuid: B.projectUuid }, 8000);
-      if (status === 200 && json?.code === 200) {
-        const s = String(json.result?.orderStatus || "");
-        if (/CANCEL/i.test(s)) return "cancelled";
-        if (/COMPLETE|PAID|PAY|FINISH/i.test(s)) return "paid";
-        return "pending";
-      }
-      // detail 查不到("无权/不存在"): 已支付订单已转出业务订单模块的信号, 用 bus/list 复核(不在列表=已支付转移)
-      if (status === 200 && /无权查看|不存在/.test(String(json?.text || ""))) {
-        const list = await post("/order/client/order/bus/list", cred, { projectUuid: B.projectUuid }, 8000);
-        if (list?.code === 200) {
-          const stillThere = (list?.result?.data || []).some((o) => String(o.orderUuid) === String(orderUuid));
-          if (!stillThere) return "paid";
-          const row = (list.result.data || []).find((o) => String(o.orderUuid) === String(orderUuid));
-          if (row && /CANCEL/i.test(String(row.orderStatus || ""))) return "cancelled";
-        }
-      }
-      return null;
+      if (status !== 200 || json?.code !== 200) return null;
+      const s = String(json.result?.orderStatus || "");
+      if (/CANCEL/i.test(s)) return "cancelled";
+      if (/PAID|COMPLETE|FINISH/i.test(s)) return "paid";
+      return "pending";
     } catch { return null; }
+  }
+
+  // 已约场地列表(预约管理契约): check/reserve/index 按订单(orderBusUuid)分组, 每条含场次明细与核销码
+  async function listMyBookings(cred) {
+    const { status, json } = await post("/business/client/check/reserve/index", cred, { pageNum: 1, pageSize: 100, statusView: "待使用", isWholeCheck: true, projectUuid: B.projectUuid });
+    if (status !== 200 || json?.code !== 200) throw new Error(json?.text || `HTTP ${status}`);
+    const byOrder = new Map();
+    for (const r of json.result?.data || []) {
+      const key = String(r.orderBusUuid || r.checkReserveUuid || "");
+      if (!key) continue;
+      if (!byOrder.has(key)) byOrder.set(key, { uid: key, createdAt: r.creationDate, status: r.statusView, items: [], raw: { orderPayUuid: r.orderPayUuid, verifyCodes: [] } });
+      const b = byOrder.get(key);
+      b.items.push({ court: r.fieldName, begin: r.reserveStartTime, end: r.reserveEndTime, cost: Number(r.subTotal) || 0 });
+      b.amount = Number(r.orderBusSubTotal) || b.items.reduce((s, it) => s + it.cost, 0);
+      if (r.verifyCode && !b.raw.verifyCodes.includes(r.verifyCode)) b.raw.verifyCodes.push(r.verifyCode);
+    }
+    return [...byOrder.values()];
   }
 
   // 取消(取消支付即释放场次); uid 为下单返回的 orderPayUuid
@@ -188,7 +192,7 @@ export function createCrlandAdapter(cfg) {
   }
 
   return {
-    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, classifyGrabResult,
+    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, listMyBookings, classifyGrabResult,
     payments: { wechat: "wxMini" },
   };
 }
