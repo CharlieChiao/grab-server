@@ -144,16 +144,30 @@ export function createCrlandAdapter(cfg) {
 
   // 支付状态查询契约: 轮询/超时判定前确认订单真实状态, 避免"已付款仍判失败"或"已取消傻等超时"
   // 返回 "paid"(订单完成) / "cancelled"(场馆已取消) / "pending"(待支付) / null(查询失败, 调用方按原逻辑处理)
+  // 实测(2026-09-25): 已支付订单会转出业务订单模块——detail 报"无权查看/不存在"且 bus/list 不再列出;
+  // 已取消订单仍留在列表(detail 可查 CANCELLED)。以此区分三种终态。
   async function checkPaymentStatus(cred, result) {
     try {
       const orderUuid = result?.raw?.result?.orderBusUuid || result?.raw?.orderBusUuid;
       if (!orderUuid) return null;
       const { status, json } = await post("/order/client/order/bus/detail", cred, { orderUuid, projectUuid: B.projectUuid }, 8000);
-      if (status !== 200 || json?.code !== 200) return null;
-      const s = String(json.result?.orderStatus || "");
-      if (/CANCEL/i.test(s)) return "cancelled";
-      if (/COMPLETE|PAID|PAY|FINISH/i.test(s)) return "paid";
-      return "pending";
+      if (status === 200 && json?.code === 200) {
+        const s = String(json.result?.orderStatus || "");
+        if (/CANCEL/i.test(s)) return "cancelled";
+        if (/COMPLETE|PAID|PAY|FINISH/i.test(s)) return "paid";
+        return "pending";
+      }
+      // detail 查不到("无权/不存在"): 已支付订单已转出业务订单模块的信号, 用 bus/list 复核(不在列表=已支付转移)
+      if (status === 200 && /无权查看|不存在/.test(String(json?.text || ""))) {
+        const list = await post("/order/client/order/bus/list", cred, { projectUuid: B.projectUuid }, 8000);
+        if (list?.code === 200) {
+          const stillThere = (list?.result?.data || []).some((o) => String(o.orderUuid) === String(orderUuid));
+          if (!stillThere) return "paid";
+          const row = (list.result.data || []).find((o) => String(o.orderUuid) === String(orderUuid));
+          if (row && /CANCEL/i.test(String(row.orderStatus || ""))) return "cancelled";
+        }
+      }
+      return null;
     } catch { return null; }
   }
 
