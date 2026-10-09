@@ -187,6 +187,7 @@ export function createCrlandAdapter(cfg) {
     if (result?.success === true) return "success";
     const message = String(result?.message || "");
     if (/频繁|429|too many/i.test(message)) return "rate-limited";
+    if (/正在处理|处理中|稍后/i.test(message)) return "transient"; // 场次处理锁(放场高峰并发), 短间隔重试可成功
     if (/不可预约|已开始|已被|已满|isAbleReserve/i.test(message)) return "not-released";
     return "terminal";
   }
