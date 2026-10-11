@@ -22,6 +22,29 @@ function rowToJob(row) {
   };
 }
 export function listJobs() { return db.prepare("SELECT * FROM jobs ORDER BY created_at").all().map(rowToJob); }
+// 暂停/恢复待执行任务: paused 状态不被调度(scheduler 跳过), 恢复后按原 fireAt 继续执行(过点则立即)
+export function pauseJob(id, userId) {
+  const row = db.prepare("SELECT id, status FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "pending") return { error: "仅待执行任务可暂停" };
+  updateJob(id, { status: "paused" });
+  return { job: getJob(id, userId) };
+}
+export function resumeJob(id, userId) {
+  const row = db.prepare("SELECT id, status FROM jobs WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  if (row.status !== "paused") return { error: "仅已暂停任务可恢复" };
+  updateJob(id, { status: "pending" });
+  return { job: getJob(id, userId) };
+}
+// 删除历史任务记录(仅归档表, 已生成的订单不受影响)
+export function deleteHistoryJob(id, userId) {
+  const row = db.prepare("SELECT id FROM job_history WHERE id=? AND (user_id=? OR created_by_user_id=?)").get(id, userId, userId);
+  if (!row) return { error: "not found" };
+  db.prepare("DELETE FROM job_history WHERE id=?").run(id);
+  db.prepare("DELETE FROM job_attempts WHERE job_id=?").run(id);
+  return { ok: true };
+}
 export function listJobsForUser(userId) {
   return db.prepare("SELECT * FROM jobs WHERE user_id=? OR created_by_user_id=? ORDER BY created_at DESC").all(userId, userId).map(rowToJob);
 }

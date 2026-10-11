@@ -27,7 +27,7 @@ async function tick() {
   pollAwaitingPayments(now).catch((error) => console.warn("[payment-poll]", error.message));
   const jobs = listJobs();
   for (const job of jobs) {
-    if (job.status !== "pending" || scheduled.has(job.id)) continue;
+    if (job.status !== "pending" || scheduled.has(job.id)) continue; // paused 状态不调度(暂停期间不执行, 恢复后按原 fireAt 继续)
     const fireMs = job.fireAt ? new Date(job.fireAt).getTime() : 0;
     if (!job.fireAt || fireMs <= now) { scheduled.add(job.id); runGrab(job).catch((e) => console.error("[grab]", e)); }
     else if (fireMs - now <= LOOKAHEAD_MS) { scheduled.add(job.id); schedulePreciseFire(job, fireMs); }
