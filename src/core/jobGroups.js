@@ -21,7 +21,7 @@ const rowToGroup = (row) => row && ({
 
 function counts(uid) {
   const rows = db.prepare(`SELECT status FROM jobs WHERE group_uid=? UNION ALL SELECT status FROM job_history WHERE group_uid=?`).all(uid, uid);
-  const result = { total: rows.length, pending: 0, running: 0, awaiting_payment: 0, done: 0, failed: 0 };
+  const result = { total: rows.length, pending: 0, running: 0, awaiting_payment: 0, paused: 0, done: 0, failed: 0 };
   for (const row of rows) if (Object.hasOwn(result, row.status)) result[row.status]++;
   return result;
 }
@@ -33,7 +33,8 @@ export function presentGroup(row) {
   let outcome = "pending";
   if (summary.total && group.successPolicy === "any" && summary.done > 0) outcome = "success";
   else if (summary.total && group.successPolicy === "all" && summary.done === summary.total) outcome = "success";
-  else if (summary.total && summary.pending + summary.running + summary.awaiting_payment === 0) outcome = "failed";
+  else if (summary.pending + summary.running + summary.awaiting_payment + summary.paused === 0) outcome = "failed";
+  else if (summary.paused > 0 && summary.pending + summary.running + summary.awaiting_payment === 0) outcome = "paused"; // 全部待执行任务已暂停
   return { ...group, summary, outcome };
 }
 
@@ -74,6 +75,19 @@ export function updateJobGroup(uid, userId, input = {}) {
 
 export function stopJobGroup(uid, userId) {
   return db.prepare("UPDATE task_groups SET status='stopped',repeat_weekly=0,updated_at=? WHERE uid=? AND created_by_user_id=?").run(nowIso(), uid, userId).changes > 0;
+}
+
+// 暂停/恢复任务组: 组内所有待执行任务 pending ⇄ paused(scheduler 跳过 paused), 组保持 active 可恢复;
+// 每周重复组的本周任务暂停期间不会终结(jobs 表仍有成员), 恢复后按原 fireAt 继续
+export function pauseJobGroup(uid, userId) {
+  requireWritableGroup(uid, userId);
+  const paused = db.prepare("UPDATE jobs SET status='paused',updated_at=? WHERE group_uid=? AND status='pending'").run(nowIso(), uid).changes;
+  return { paused };
+}
+export function resumeJobGroup(uid, userId) {
+  requireWritableGroup(uid, userId);
+  const resumed = db.prepare("UPDATE jobs SET status='pending',updated_at=? WHERE group_uid=? AND status='paused'").run(nowIso(), uid).changes;
+  return { resumed };
 }
 
 // 仅“任一成功”组会在成员真正完成后停止其余待执行任务。

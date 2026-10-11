@@ -1,5 +1,5 @@
 import express from "express";
-import { createJobGroup, getJobGroup, listJobGroups, stopJobGroup, updateJobGroup } from "../core/jobGroups.js";
+import { createJobGroup, getJobGroup, listJobGroups, stopJobGroup, updateJobGroup, pauseJobGroup, resumeJobGroup } from "../core/jobGroups.js";
 
 const router = express.Router();
 router.get("/", (req, res) => res.json({ ok: true, groups: listJobGroups(req.user.id) }));
@@ -14,4 +14,12 @@ router.put("/:uid", (req, res) => {
   catch (error) { res.status(error.statusCode || 400).json({ error: String(error.message || error) }); }
 });
 router.delete("/:uid", (req, res) => res.json({ ok: stopJobGroup(req.params.uid, req.user.id) }));
+router.post("/:uid/pause", (req, res) => {
+  try { res.json({ ok: true, ...pauseJobGroup(req.params.uid, req.user.id) }); }
+  catch (error) { res.status(error.statusCode || 400).json({ error: String(error.message || error) }); }
+});
+router.post("/:uid/resume", (req, res) => {
+  try { res.json({ ok: true, ...resumeJobGroup(req.params.uid, req.user.id) }); }
+  catch (error) { res.status(error.statusCode || 400).json({ error: String(error.message || error) }); }
+});
 export default router;
