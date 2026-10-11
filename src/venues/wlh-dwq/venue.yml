@@ -32,6 +32,8 @@ releaseRetry:
   unavailableGraceMs: 15000
   defaultMinIntervalMs: 2000
   maxAttempts: 6
+  # 未放场失败 → watch 模式: 500ms 轮询场次 canAppoint(查询接口无风控, 不占下单队列), 可约立即下单(50ms 校准节奏)
+  watchSlotRelease: true
 courts:
   - name: 1号场深圳
     type: tennis
