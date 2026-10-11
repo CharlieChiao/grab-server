@@ -1,4 +1,5 @@
 import { listJobs, updateJob, archiveJob } from "./jobStore.js";
+import { db } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess } from "./jobGroups.js";
 import { getVenue } from "./venueRegistry.js";
@@ -71,6 +72,18 @@ function formatWait(ms) {
 // 泛思博特等已禁余额订场的球场靠次卡兜底; 次卡不足/无卡自动落到余额, 全失败返回最后一次结果。
 // 限流按下单用户分 scope: B 与 A 是不同凭证用户, 理论上银豹按用户限流, 不应互相排队(@todo 若实测触发"操作太频繁"说明按 IP 限流, 需回退为共享 scope)
 async function attemptBalanceBooking(venue, job, credential, via, sinceMs, allowedPayments = null) {
+  // any 策略组内已有成功成员时不再兜底下单——防止"一个成功 + 待支付兄弟超时后兜底又成功"的双重订场双份扣款
+  if (job.groupUid) {
+    const group = db.prepare("SELECT success_policy FROM task_groups WHERE uid=? AND status='active'").get(job.groupUid);
+    if (group?.success_policy === "any") {
+      const siblingDone = db.prepare("SELECT 1 FROM job_history WHERE group_uid=? AND status='done' LIMIT 1").get(job.groupUid)
+        || db.prepare("SELECT 1 FROM jobs WHERE group_uid=? AND status='done' AND id!=? LIMIT 1").get(job.groupUid, job.id);
+      if (siblingDone) {
+        console.log(`[fallback] job=${job.id} 跳过兜底: 组内已有任务成功`);
+        return { success: false, message: "组内已有任务成功，无需兜底" };
+      }
+    }
+  }
   const tries = [];
   if (venue.payments?.timecard != null && (!allowedPayments || allowedPayments.includes("timecard"))) tries.push({ code: venue.payments.timecard, name: "次卡" });
   if (venue.payments?.balance != null && (!allowedPayments || allowedPayments.includes("balance"))) tries.push({ code: venue.payments.balance, name: "余额" });
