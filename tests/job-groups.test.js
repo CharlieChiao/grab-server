@@ -20,7 +20,7 @@ test("group exposes a stable uid and all-success aggregate", () => {
   groups.finalizeAndRepeatGroup(group.uid);
   const result = groups.getJobGroup(group.uid, "creator-a");
   assert.equal(result.outcome, "failed");
-  assert.deepEqual(result.summary, { total: 2, pending: 0, running: 0, awaiting_payment: 0, done: 1, failed: 1 });
+  assert.deepEqual(result.summary, { total: 2, pending: 0, running: 0, awaiting_payment: 0, paused: 0, done: 1, failed: 1 });
 });
 
 test("only any-success groups stop pending siblings", () => {
