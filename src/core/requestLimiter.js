@@ -1,8 +1,16 @@
 import { getRiskProfile } from "./riskProfile.js";
+import { getVenue } from "./venueRegistry.js";
 const queues = new Map(); // scopeKey -> { items: [], running: false }
 const stateByVenue = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 function state(scopeKey) { if (!stateByVenue.has(scopeKey)) stateByVenue.set(scopeKey, { nextAllowedAt: 0, cooldownUntil: 0 }); return stateByVenue.get(scopeKey); }
+
+// 重试校准值(实测下单接口最小安全间隔): 有校准值的场馆, 所有下单请求的队列节奏统一采用,
+// 取代 riskProfile.booking.minIntervalMs 的保守默认 —— 校准的意义就在于此
+function calibratedIntervalMs(venueId) {
+  const value = Number(getVenue(venueId)?.meta?.raw?.releaseRetry?.fastRetry?.minIntervalMs);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 // 下单限流队列: 同 scope(店铺+凭证用户)串行互斥。
 // options.priority: 'high'(到点抢订任务) 插队到普通任务(捡漏等)之前 —— 开抢时刻的抢订
@@ -32,7 +40,8 @@ async function run(scopeKey) {
       try {
         const result = await item.task();
         const profile = getRiskProfile(item.venueId, item.adapterProfile);
-        const minIntervalMs = Number.isFinite(Number(item.options.minIntervalMs)) ? Number(item.options.minIntervalMs) : Number(profile.booking.minIntervalMs);
+        const calibrated = calibratedIntervalMs(item.venueId);
+        const minIntervalMs = Number.isFinite(Number(item.options.minIntervalMs)) ? Number(item.options.minIntervalMs) : (calibrated != null ? calibrated : Number(profile.booking.minIntervalMs));
         const jitterMs = Number.isFinite(Number(item.options.jitterMs)) ? Number(item.options.jitterMs) : Number(profile.booking.jitterMs);
         const jitter = Math.floor(Math.random() * (Math.max(0, jitterMs) + 1));
         s.nextAllowedAt = Date.now() + Math.max(0, minIntervalMs) + jitter;

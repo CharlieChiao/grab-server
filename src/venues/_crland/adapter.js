@@ -64,7 +64,7 @@ export function createCrlandAdapter(cfg, options = {}) {
   const meta = { id: cfg.id, name: cfg.name, logo: cfg.logo || "", desc: cfg.desc || "", raw: cfg };
   const riskProfile = {
     scopeKey: `crland:project:${B.projectUuid}`,
-    booking: { minIntervalMs: 1500, jitterMs: 400, notReleasedIntervalMs: 2500, transientIntervalMs: 300, cooldownMs: 10000, maxRetry: 8 },
+    booking: { minIntervalMs: 1500, jitterMs: 400, notReleasedIntervalMs: 2500, transientIntervalMs: 0, cooldownMs: 10000, maxRetry: 8 }, // transientIntervalMs=0: 场次锁重试不额外等待, 节奏由限流器的校准值(50ms)统一控制
   };
 
   async function ready(cred) {
