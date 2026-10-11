@@ -201,6 +201,7 @@ export function createCrlandAdapter(cfg, options = {}) {
     rules: [
       { kind: "rate_limited", patterns: ["频繁", "429", "too many"] },
       { kind: "transient", patterns: ["正在处理", "处理中", "稍后再试", "系统繁忙"] }, // 场次处理锁(放场高峰并发), 短间隔重试可成功
+      { kind: "occupied", patterns: ["已有预约", "已被预约"] }, // 被订(不可约), 正常任务不重试; 校准场景为合法目标
       { kind: "not_released", patterns: ["不可预约", "已开始", "已被", "已满", "未开放", "提前"] },
       { kind: "payment", patterns: ["支付方式只能是", "支付失败", "余额不足"] },
     ],

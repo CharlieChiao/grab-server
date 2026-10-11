@@ -21,7 +21,8 @@ function classify(venue, result) {
 
 function isUnavailable(venue, result) {
   const failure = failureOf(venue, result);
-  return failure.kind === "unavailable" || failure.kind === "not_released";
+  // 被订(occupied/scheduled/locked)同样是合法校准目标: 响应稳定且无副作用, 场馆拒绝文案如"已有预约"
+  return ["unavailable", "not_released", "occupied", "scheduled", "locked"].includes(failure.kind);
 }
 
 const calibrationRuns = new Map();
