@@ -61,7 +61,7 @@ export function createCrlandAdapter(cfg) {
   const meta = { id: cfg.id, name: cfg.name, logo: cfg.logo || "", desc: cfg.desc || "", raw: cfg };
   const riskProfile = {
     scopeKey: `crland:project:${B.projectUuid}`,
-    booking: { minIntervalMs: 1500, jitterMs: 400, notReleasedIntervalMs: 2500, transientIntervalMs: 3000, cooldownMs: 10000, maxRetry: 8 },
+    booking: { minIntervalMs: 1500, jitterMs: 400, notReleasedIntervalMs: 2500, transientIntervalMs: 300, cooldownMs: 10000, maxRetry: 8 },
   };
 
   async function ready(cred) {
