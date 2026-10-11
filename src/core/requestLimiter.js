@@ -6,10 +6,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, m
 function state(scopeKey) { if (!stateByVenue.has(scopeKey)) stateByVenue.set(scopeKey, { nextAllowedAt: 0, cooldownUntil: 0 }); return stateByVenue.get(scopeKey); }
 
 // 重试校准值(实测下单接口最小安全间隔): 有校准值的场馆, 所有下单请求的队列节奏统一采用,
-// 取代 riskProfile.booking.minIntervalMs 的保守默认 —— 校准的意义就在于此
+// 取代 riskProfile.booking.minIntervalMs 的保守默认 —— 校准的意义就在于此。
+// 兼容两种校准落盘格式: 新版 minIntervalMs(单一值) / 旧版 intervalsMs(递进序列, 取最大值保守)
 function calibratedIntervalMs(venueId) {
-  const value = Number(getVenue(venueId)?.meta?.raw?.releaseRetry?.fastRetry?.minIntervalMs);
-  return Number.isFinite(value) && value >= 0 ? value : null;
+  const fastRetry = getVenue(venueId)?.meta?.raw?.releaseRetry?.fastRetry;
+  const value = Number(fastRetry?.minIntervalMs);
+  if (Number.isFinite(value) && value >= 0) return value;
+  const intervals = Array.isArray(fastRetry?.intervalsMs) ? fastRetry.intervalsMs.map(Number).filter(Number.isFinite) : [];
+  return intervals.length ? Math.max(...intervals) : null;
 }
 
 // 下单限流队列: 同 scope(店铺+凭证用户)串行互斥。
