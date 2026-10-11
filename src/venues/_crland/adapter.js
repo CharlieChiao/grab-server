@@ -11,9 +11,12 @@
  */
 import { Pool } from "undici";
 import { constants as cryptoConstants } from "node:crypto";
+import fs from "node:fs";
+import yaml from "js-yaml";
 
-export function createCrlandAdapter(cfg) {
+export function createCrlandAdapter(cfg, options = {}) {
   const B = cfg.backend;
+  const venueFile = options.venueFile; // saveRetryCalibration 回写配置用
   const areaUuid = B.fieldAreaUuid; // 场地区域(网球/羽毛球/乒乓球), listSlots/grab 的区域标识
   const slotMinutes = Math.max(30, Number(cfg.bookingHours?.slotMinutes) || 60);
 
@@ -203,8 +206,82 @@ export function createCrlandAdapter(cfg) {
     ],
   };
 
+  // 风控探测(riskCalibration 契约): 查 7 天前的场次矩阵(只读无副作用), 供二分校准最小安全间隔
+  async function riskProbe(cred) {
+    const probeDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const started = Date.now();
+    try {
+      await listSlots({ date: probeDate }, cred);
+      return { ok: true, rateLimited: false, latencyMs: Date.now() - started, endpoint: "/business/client/field/area/matrix" };
+    } catch (error) {
+      const message = String(error.message || error);
+      return { ok: false, rateLimited: /频繁|429|too many/i.test(message), latencyMs: Date.now() - started, message, endpoint: "/business/client/field/area/matrix" };
+    }
+  }
+
+  // 用预构建 headers 直接发请求(fireGrab 用; 与 request() 的差别是不再从 cred 组装头)
+  async function rawPost(path_, headerMap, bodyStr, timeoutMs = 8000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const { statusCode, body } = await pool.request({ method: "POST", path: path_, headers: headerMap, body: bodyStr, signal: ctrl.signal });
+      const text = await body.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch {}
+      return { status: statusCode, json };
+    } finally { clearTimeout(timer); }
+  }
+
+  // 预构建下单请求(放场首发/重试校准共用): 提前查矩阵锁定 fieldTimeUuid, 到点直接发射省一次查询 RTT
+  async function buildGrabRequest(target, cred) {
+    const courts = Array.isArray(target.courts) && target.courts.length
+      ? target.courts.map((c) => ({ uid: String(c.courtUid ?? ""), time: String(c.time || target.time || "") }))
+      : [{ uid: String(target.courtUid ?? ""), time: String(target.time || "") }];
+    if (!courts.length || !courts[0].uid || !courts[0].time) throw new Error("缺少场地或时段");
+    const slots = await listSlots({ date: target.date }, cred);
+    const infos = courts.map((c) => {
+      const slot = slots.find((s) => s.uid === c.uid && s.begin.slice(11, 16) === c.time);
+      if (!slot) throw new Error(`未找到场次 ${c.uid} ${c.time}`);
+      // 不检查 canAppoint: 预构建请求发向不可约场次由场馆拒绝(重试校准依赖此行为), 正常任务用 grab() 自带检查
+      return { fieldUuid: c.uid, fieldTimeUuid: slot.fieldTimeUuid, wholeFieldUuid: c.uid };
+    });
+    const payload = {
+      payment: String((target.ext && target.ext.payMethod) || "wxMini"),
+      reserveDate: target.date,
+      fieldTimeInfos: infos,
+      couponAssignUuid: (target.ext && target.ext.couponAssignUuid) || "",
+      enterpriseUuid: "",
+      discountSpecUuid: "",
+      checkReserveUuid: "",
+      projectUuid: B.projectUuid,
+    };
+    return { path: "/business/client/field/area/reserve", headers: headers(cred), body: JSON.stringify(payload), usesTimeCard: false };
+  }
+
+  // 发射预构建请求; prebuilt 兼容 Promise(releaseProbe 的 buildGrabRequest 调用不 await)
+  async function fireGrab(prebuilt) {
+    const built = await prebuilt;
+    const { status, json } = await rawPost(built.path, built.headers, built.body);
+    if (status === 200 && json?.code === 200 && json.result?.orderPayUuid) {
+      return { success: true, orderId: json.result.orderPayUuid, requiresManualPayment: true, message: `下单成功(¥${json.result.subTotal})，等待微信支付`, raw: json };
+    }
+    return { success: false, message: (json && (json.text || json.message || `code=${json.code}`)) || `下单失败(HTTP ${status})`, raw: json };
+  }
+
+  // 重试校准结果持久化(releaseProbe 契约): 回写 yml 的 releaseRetry.fastRetry
+  function saveRetryCalibration(calibration) {
+    if (!venueFile) return null;
+    const fresh = yaml.load(fs.readFileSync(venueFile, "utf8"));
+    fresh.releaseRetry = fresh.releaseRetry || {};
+    fresh.releaseRetry.fastRetry = { ...(fresh.releaseRetry.fastRetry || {}), minIntervalMs: Number(calibration.extraWaitMs || 0), jitterMs: Number(fresh.releaseRetry.fastRetry?.jitterMs || 30), calibration: { ...calibration } };
+    fs.writeFileSync(venueFile, yaml.dump(fresh, { lineWidth: -1, noRefs: true }), "utf8");
+    cfg.releaseRetry = fresh.releaseRetry;
+    meta.raw.releaseRetry = fresh.releaseRetry;
+    return fresh.releaseRetry.fastRetry;
+  }
+
   return {
-    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, listMyBookings, classifyGrabResult, failureReasons,
+    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, listMyBookings, classifyGrabResult, riskProbe, buildGrabRequest, fireGrab, saveRetryCalibration, failureReasons,
     payments: { wechat: "wxMini" },
   };
 }

@@ -48,7 +48,7 @@ export async function calibrateUnavailableRetry({ venueId, userId, target, sampl
   if (!target?.date || !(target.court || target.courtUid) || !target.time) throw new Error("single court, date and time are required");
   const credential = getCredential(venueId, userId);
   if (!credential) throw new Error("credential missing");
-  const normalized = { date: target.date, court: target.court, courtUid: target.courtUid, time: target.time, cost: Number(target.cost), ext: { ...(target.ext || {}), payMethod: 900, totalCost: Number(target.cost) } };
+  const normalized = { date: target.date, court: target.court, courtUid: target.courtUid, time: target.time, cost: Number(target.cost), ext: { ...(target.ext || {}), payMethod: venue.payments?.wechat ?? target.ext?.payMethod, totalCost: Number(target.cost) } };
   if (!Number.isFinite(normalized.cost) || normalized.cost <= 0) throw new Error("valid cost is required");
   const samples = Math.floor(clamp(sampleCount, 6, 3, 12));
   const step = clamp(stepMs, 50, 10, 500);

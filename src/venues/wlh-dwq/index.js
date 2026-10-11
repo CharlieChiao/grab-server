@@ -7,4 +7,4 @@ import yaml from "js-yaml";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cfg = yaml.load(fs.readFileSync(path.join(__dirname, "venue.yml"), "utf8"));
 
-export default createCrlandAdapter(cfg);
+export default createCrlandAdapter(cfg, { venueFile: path.join(__dirname, "venue.yml") });
