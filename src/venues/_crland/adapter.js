@@ -192,8 +192,19 @@ export function createCrlandAdapter(cfg) {
     return "terminal";
   }
 
+  // 失败原因声明: registry 据此构建 classifyFailure 并装饰 grab 结果(scheduler 重试判定唯一入口)。
+  // 未声明时 grab 结果不带 failure 字段, scheduler 回退关键词分类(只认 429/transient 标志) → "正在处理"被误判 terminal 不重试。
+  const failureReasons = {
+    rules: [
+      { kind: "rate_limited", patterns: ["频繁", "429", "too many"] },
+      { kind: "transient", patterns: ["正在处理", "处理中", "稍后再试", "系统繁忙"] }, // 场次处理锁(放场高峰并发), 短间隔重试可成功
+      { kind: "not_released", patterns: ["不可预约", "已开始", "已被", "已满", "未开放", "提前"] },
+      { kind: "payment", patterns: ["支付方式只能是", "支付失败", "余额不足"] },
+    ],
+  };
+
   return {
-    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, listMyBookings, classifyGrabResult,
+    meta, riskProfile, ready, grab, listSlots, cancelBooking, checkPaymentStatus, listMyBookings, classifyGrabResult, failureReasons,
     payments: { wechat: "wxMini" },
   };
 }
