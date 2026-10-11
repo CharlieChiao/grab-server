@@ -46,7 +46,10 @@ export function finishPayment(jobId, now = Date.now()) {
   const job = listJobs().find((item) => item.id === jobId);
   if (!job || job.status !== "awaiting_payment") return null;
   const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
-  if (completed) finishAndArchive(completed);
+  if (completed) {
+    cancelSiblingPendingPayments(completed).catch(() => {});
+    finishAndArchive(completed);
+  }
   return completed;
 }
 
@@ -186,7 +189,7 @@ export async function pollAwaitingPayments(now = Date.now()) {
         const paymentState = await checkVenuePaymentStatus(job);
         if (paymentState === "paid") {
           const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认（订单状态自动确认）", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
-          if (completed) { notifyJobResult(completed).catch(() => {}); archiveJob(completed.id); finalizeAndRepeatGroup(completed.groupUid); }
+          if (completed) { notifyJobResult(completed).catch(() => {}); archiveJob(completed.id); cancelSiblingPendingPayments(completed).catch(() => {}); finalizeAndRepeatGroup(completed.groupUid); }
           continue;
         }
         if (paymentState === "cancelled") {
@@ -233,6 +236,30 @@ export function targetSlotsAvailable(target, slots) {
   }));
 }
 
+// 组内一个任务支付确认成功后, 自动取消其余待支付兄弟的订单并终止之——
+// 彻底堵死"any 组双重订场双份扣款"(兜底路径已挡, 这里覆盖用户手动付两个待支付订单的场景)。
+// 取消用适配器 cancelBooking 契约(银豹 apptUid / crland orderPayUuid 均为 result.orderId); 取消失败保持待支付由用户自行处置。
+export async function cancelSiblingPendingPayments(paidJob) {
+  if (!paidJob.groupUid) return;
+  try {
+    const group = db.prepare("SELECT success_policy FROM task_groups WHERE uid=? AND status='active'").get(paidJob.groupUid);
+    if (!group || group.success_policy !== "any") return;
+    const siblings = listJobs().filter((j) => j.groupUid === paidJob.groupUid && j.status === "awaiting_payment" && j.id !== paidJob.id);
+    for (const sibling of siblings) {
+      const venue = getVenue(sibling.venueId);
+      const orderId = sibling.result?.orderId;
+      if (!venue || typeof venue.cancelBooking !== "function" || !orderId) continue;
+      try {
+        const cancel = await venue.cancelBooking(getCredential(sibling.venueId, sibling.userId), orderId);
+        if (cancel?.ok !== true) { console.warn(`[group-pay] job=${sibling.id} 兄弟订单取消失败: ${cancel?.error || "unknown"}`); continue; }
+        const stopped = updateJob(sibling.id, { status: "stopped", result: { ...sibling.result, success: false, message: "组内已支付成功，本订单已自动取消（未扣款）" } });
+        if (stopped) { notifyJobResult(stopped).catch(() => {}); archiveJob(stopped.id); }
+        console.log(`[group-pay] job=${sibling.id} 组内已有支付成功, 已自动取消其待支付订单 ${orderId}`);
+      } catch (error) { console.warn(`[group-pay] job=${sibling.id} 取消兄弟订单异常: ${String(error?.message || error)}`); }
+    }
+  } catch (error) { console.warn("[group-pay] cancelSiblingPendingPayments:", String(error?.message || error)); }
+}
+
 export async function expireAwaitingPayments(now = Date.now()) {
   const expired = [];
   for (const job of listJobs()) {
@@ -243,7 +270,7 @@ export async function expireAwaitingPayments(now = Date.now()) {
     const finalState = await checkVenuePaymentStatus(job);
     if (finalState === "paid") {
       const completed = updateJob(job.id, { status: "done", result: { ...job.result, success: true, message: "支付成功，预约已确认（订单状态自动确认）", paymentStatus: "paid", paidAt: new Date(now).toISOString() } });
-      if (completed) { expired.push(completed); finishAndArchive(completed); }
+      if (completed) { expired.push(completed); cancelSiblingPendingPayments(completed).catch(() => {}); finishAndArchive(completed); }
       continue;
     }
     const baseMessage = `支付超时（实际等待 ${formatWait(paymentElapsedMs(job, now))} 未完成付款）`;

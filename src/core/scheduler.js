@@ -6,7 +6,7 @@ import { getRiskProfile, recordRiskEvent } from "./riskProfile.js";
 import { db, nowIso } from "./database.js";
 import { notifyJobResult } from "./notifications.js";
 import { finalizeAndRepeatGroup, stopPendingSiblingsAfterAnySuccess, deferFailureNotification } from "./jobGroups.js";
-import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable } from "./paymentLifecycle.js";
+import { creatorBalanceFallback, expireAwaitingPayments, fallbackEnabled, markAwaitingPayment, pollAwaitingPayments, requiresManualPayment, targetSlotsAvailable, cancelSiblingPendingPayments } from "./paymentLifecycle.js";
 import { normalizeFailure } from "./failureReasons.js";
 
 const TICK_MS = 1000;
@@ -323,6 +323,7 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
       archiveJob(completed.id);
       if (result?.success) {
         notifyJobResult(completed).catch((error) => console.warn("[notification]", error.message));
+        cancelSiblingPendingPayments(completed).catch(() => {}); // 取消组内其余待支付订单, 防双重扣款
         for (const stopped of stopPendingSiblingsAfterAnySuccess(completed.groupUid, completed.id)) {
           notifyJobResult(stopped).catch(() => {});
         }
