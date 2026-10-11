@@ -23,7 +23,7 @@ export function startScheduler() {
   // 启动恢复: 服务重启时正在执行的任务状态残留 running(进程已终止, 永远不会结束), 复位 pending 重新调度;
   // 场次已过的任务会被立即执行并按失败收尾归档, 不再出现"抢订中"僵尸卡
   try {
-    const stale = db.prepare("UPDATE jobs SET status='pending', result=NULL, updated_at=? WHERE status='running'").run(nowIso()).changes;
+    const stale = db.prepare("UPDATE jobs SET status='pending', result_json=NULL, updated_at=? WHERE status='running'").run(nowIso()).changes;
     if (stale) console.log(`[scheduler] 恢复 ${stale} 个中断任务(running → pending)`);
   } catch (error) { console.warn("[scheduler] 恢复中断任务失败:", String(error?.message || error)); }
   console.log(`[scheduler] started tick=${TICK_MS}ms`); timer = setInterval(tick, TICK_MS); tick();
