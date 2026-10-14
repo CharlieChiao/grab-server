@@ -5,7 +5,25 @@ import { paymentKind } from "./payCodes.js";
 const APPID = process.env.WECHAT_APPID || "";
 const APP_SECRET = process.env.WECHAT_APP_SECRET || "";
 const TEMPLATE_ID = process.env.WECHAT_JOB_RESULT_TEMPLATE_ID || "";
+// Bark 推送(iOS App, 锁屏强提醒): 不受微信订阅消息一次性额度限制, 作为任务结果的主通知通道。
+// .env 配置 BARK_DEVICE_KEY(App 内复制); BARK_SERVER 可选自建(默认官方 https://api.day.app)
+const BARK_KEY = process.env.BARK_DEVICE_KEY || "";
+const BARK_SERVER = process.env.BARK_SERVER || "https://api.day.app";
 let cachedToken = null;
+
+// Bark 推送: POST /push {device_key, title, body, group}; 失败静默(通知非关键路径)
+async function sendBarkPush(title, body, { group = "抢订任务", sound = "" } = {}) {
+  if (!BARK_KEY) return { skipped: true };
+  try {
+    const res = await fetch(`${BARK_SERVER}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_key: BARK_KEY, title, body, group, ...(sound ? { sound } : {}) }),
+    });
+    const json = await res.json().catch(() => null);
+    return json?.code === 200 ? { ok: true } : { ok: false, error: json?.message || "bark push failed" };
+  } catch (error) { console.warn("[bark]", String(error?.message || error)); return { ok: false, error: String(error?.message || error) }; }
+}
 
 function key() { return crypto.createHash("sha256").update(process.env.GRAB_API_AUTH_SECRET || "").digest(); }
 export function encryptOpenId(value) {
@@ -39,7 +57,8 @@ async function accessToken() {
 }
 export async function notifyJobResult(job, options = {}) {
   const row = db.prepare("SELECT openid_ciphertext,notification_count FROM users WHERE id=?").get(job.userId);
-  if (!TEMPLATE_ID || !APPID || !APP_SECRET || !(Number(row?.notification_count || 0) > 0) || !row.openid_ciphertext) return { skipped: true };
+  const wechatReady = !!(TEMPLATE_ID && APPID && APP_SECRET && Number(row?.notification_count || 0) > 0 && row?.openid_ciphertext);
+  if (!wechatReady && !BARK_KEY) return { skipped: true }; // 两个通道都不可用才跳过; Bark 不依赖微信配置/额度
   const target = job.target || {};
   const first = Array.isArray(target.courts) ? target.courts[0] || {} : target;
   const venue = String(job.venueId || "").slice(0, 10);
@@ -57,6 +76,10 @@ export async function notifyJobResult(job, options = {}) {
     : job.status === "awaiting_payment" ? "待本人付款"
     : "\u9884\u7ea6\u5931\u8d25");
   const amount = Number(target.ext?.totalCost || target.cost || first.cost || 0);
+  // Bark 推送(iOS 锁屏提醒): 全量任务结果, 不占微信订阅额度; 待付款事件带强铃声提醒
+  const urgent = outcome === "待本人付款";
+  sendBarkPush(`抢订${outcome}`, `${activity} · ¥${amount.toFixed(2)}\n${String(job.result?.message || "").slice(0, 100)}`, { group: String(job.venueId || "任务"), ...(urgent ? { sound: "bell", level: "timeSensitive" } : {}) }).catch(() => {});
+  if (!wechatReady) return { ok: true, via: "bark" }; // 微信不可用/额度尽: Bark 已推, 到此结束
   const body = { touser: decryptOpenId(row.openid_ciphertext), template_id: TEMPLATE_ID, page: "pages/jobs/index", data: {
     thing2: { value: activity },
     phrase5: { value: outcome },
