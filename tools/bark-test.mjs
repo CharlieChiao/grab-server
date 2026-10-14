@@ -1,10 +1,9 @@
 // Bark 铃声测试脚本(本地运行, 不走服务器)
 //
 // 用法:
-//   node tools/bark-test.mjs "<Bark App 复制的链接或 Key>"                 # 默认铃声 anticipate
-//   node tools/bark-test.mjs "<Key或链接>" bell                            # 指定铃声
-//   node tools/bark-test.mjs "<Key或链接>" chime "自定义标题" "自定义内容"
-//   node tools/bark-test.mjs "<Key或链接>" --list                           # 列出全部可选铃声
+//   node tools/bark-test.mjs "<Bark App 复制的链接或 Key>"             # 默认铃声 anticipate
+//   node tools/bark-test.mjs "<Key或链接>" bell                        # 指定铃声(输入什么发什么, 不校验)
+//   node tools/bark-test.mjs "<Key或链接>" --list                      # 列出全部可选铃声
 //
 // 第一个参数支持任何形态: 纯 Key / https://api.day.app/KEY / curl 命令(直接整段粘贴 App 里复制的内容)
 
@@ -29,7 +28,7 @@ const [input, sound, title, body] = process.argv.slice(2);
 
 if (!input || input === "--help" || input === "-h") {
   console.log("用法: node tools/bark-test.mjs \"<Bark App 复制的链接或 Key>\" [铃声名] [标题] [内容]");
-  console.log(`可选铃声(${SOUNDS.length} 个):`);
+  console.log(`参考铃声(${SOUNDS.length} 个):`);
   console.log("  " + SOUNDS.join(", "));
   process.exit(0);
 }
@@ -38,8 +37,8 @@ if (input === "--list") { console.log(SOUNDS.join("\n")); process.exit(0); }
 const parsed = extractKey(input);
 if (!parsed) { console.error("未识别出 Key——请粘贴 Bark App 首页\"复制\"的完整链接, 或纯 Key"); process.exit(1); }
 
-const chosen = sound && SOUNDS.includes(sound) ? sound : "anticipate";
-if (sound && !SOUNDS.includes(sound)) console.warn(`未知铃声 "${sound}", 已回退为 anticipate。全部可选: ${SOUNDS.join(", ")}`);
+// 铃声名不做校验, 输入什么发什么(未知铃声 Bark 会用默认音)
+const chosen = sound || "anticipate";
 
 const payload = {
   device_key: parsed.key,
