@@ -9,6 +9,8 @@ const TEMPLATE_ID = process.env.WECHAT_JOB_RESULT_TEMPLATE_ID || "";
 // Key 优先读用户配置(users.bark_key 加密存, 设置页绑定); 全局 BARK_DEVICE_KEY 作为未绑定用户的兜底。
 const BARK_GLOBAL_KEY = process.env.BARK_DEVICE_KEY || "";
 const BARK_SERVER = process.env.BARK_SERVER || "https://api.day.app";
+// 紧急通知(critical/timeSensitive 级, 如"待本人付款")统一铃声
+const URGENT_SOUND = "anticipate";
 let cachedToken = null;
 
 // =====================================================================
@@ -76,8 +78,8 @@ const EVENTS = {
         title: `抢订${outcome}`,
         body: `${activity} · ¥${amount.toFixed(2)}\n${message}`,
         group: String(job.venueId || "任务"),
-        // 待付款事件用 critical 级穿透勿扰/静音(需 iOS 授权关键警报)
-        ...(outcome === "待本人付款" ? { sound: "bell", critical: true } : {}),
+        // 待付款事件用 critical 级穿透勿扰/静音(需 iOS 授权关键警报), 紧急铃声统一 anticipate
+        ...(outcome === "待本人付款" ? { sound: URGENT_SOUND, critical: true } : {}),
         wechatData: { thing2: { value: activity }, phrase5: { value: outcome }, amount21: { value: amount.toFixed(2) + "元" } },
       };
     },
