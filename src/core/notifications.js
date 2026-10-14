@@ -36,7 +36,7 @@ export function encryptOpenId(value) {
   const data = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), data]).toString("base64url");
 }
-function decryptOpenId(value) {
+export function decryptOpenId(value) {
   const raw = Buffer.from(String(value), "base64url"), iv = raw.subarray(0, 12), tag = raw.subarray(12, 28), data = raw.subarray(28);
   const decipher = crypto.createDecipheriv("aes-256-gcm", key(), iv); decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
