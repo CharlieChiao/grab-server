@@ -1,5 +1,6 @@
 import express from "express";
 import { db, nowIso } from "../core/database.js";
+import { encryptOpenId, decryptOpenId } from "../core/notifications.js";
 
 const router = express.Router();
 const MAX_AVATAR_BYTES = 512 * 1024;
@@ -14,11 +15,12 @@ function profileResponse(row) {
       : "",
     updatedAt: row?.profile_updated_at || null,
     developer: !!row?.developer,
+    barkConfigured: !!row?.bark_key,
   };
 }
 
 router.get("/me", (req, res) => {
-  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer FROM users WHERE id=?").get(req.user.id);
+  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer,bark_key FROM users WHERE id=?").get(req.user.id);
   res.json(profileResponse(row));
 });
 
@@ -48,6 +50,37 @@ router.put("/me", (req, res) => {
     .run(nickname, avatar ? mime : null, avatar, now, req.user.id);
   const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer FROM users WHERE id=?").get(req.user.id);
   res.json(profileResponse(row));
+});
+
+// Bark 推送配置(iOS): key 加密存储; 置空清除
+router.put("/me/bark-key", (req, res) => {
+  const raw = String(req.body?.barkKey || "").trim();
+  if (!raw) {
+    db.prepare("UPDATE users SET bark_key=NULL WHERE id=?").run(req.user.id);
+    const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer,bark_key FROM users WHERE id=?").get(req.user.id);
+    return res.json(profileResponse(row));
+  }
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(raw)) return res.status(400).json({ error: "Bark Key 格式无效(在 Bark App 首页复制, 形如 yJVuKyUP...)" });
+  db.prepare("UPDATE users SET bark_key=? WHERE id=?").run(encryptOpenId(raw), req.user.id);
+  const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer,bark_key FROM users WHERE id=?").get(req.user.id);
+  res.json(profileResponse(row));
+});
+
+// Bark 测试推送(验证绑定有效性)
+router.post("/me/bark-test", async (req, res) => {
+  const row = db.prepare("SELECT bark_key FROM users WHERE id=?").get(req.user.id);
+  if (!row?.bark_key) return res.status(400).json({ error: "尚未配置 Bark Key" });
+  try {
+    const key = decryptOpenId(row.bark_key);
+    const push = await fetch(`${process.env.BARK_SERVER || "https://api.day.app"}/push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_key: key, title: "抢订通知测试", body: "Bark 绑定成功！任务结果将实时推送到这台 iPhone。", group: "测试" }),
+    });
+    const json = await push.json().catch(() => null);
+    if (json?.code === 200) return res.json({ ok: true });
+    return res.status(502).json({ error: json?.message || "推送失败, 请检查 Key" });
+  } catch (error) { res.status(502).json({ error: "推送请求失败: " + String(error?.message || error) }); }
 });
 
 export default router;

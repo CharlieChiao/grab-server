@@ -6,19 +6,24 @@ const APPID = process.env.WECHAT_APPID || "";
 const APP_SECRET = process.env.WECHAT_APP_SECRET || "";
 const TEMPLATE_ID = process.env.WECHAT_JOB_RESULT_TEMPLATE_ID || "";
 // Bark 推送(iOS App, 锁屏强提醒): 不受微信订阅消息一次性额度限制, 作为任务结果的主通知通道。
-// .env 配置 BARK_DEVICE_KEY(App 内复制); BARK_SERVER 可选自建(默认官方 https://api.day.app)
-const BARK_KEY = process.env.BARK_DEVICE_KEY || "";
+// Key 优先读用户配置(users.bark_key 加密存, 设置页绑定); 全局 BARK_DEVICE_KEY 作为未绑定用户的兜底。
+const BARK_GLOBAL_KEY = process.env.BARK_DEVICE_KEY || "";
 const BARK_SERVER = process.env.BARK_SERVER || "https://api.day.app";
 let cachedToken = null;
 
-// Bark 推送: POST /push {device_key, title, body, group}; 失败静默(通知非关键路径)
-async function sendBarkPush(title, body, { group = "抢订任务", sound = "" } = {}) {
-  if (!BARK_KEY) return { skipped: true };
+// Bark 推送: POST /push {device_key, title, body, group, level, volume}; 失败静默(通知非关键路径)
+// level: active(默认)/timeSensitive(穿透专注模式)/critical(穿透勿扰+静音, 需在 iOS 给 Bark 授权"关键警报")
+async function sendBarkPush(userId, title, body, { group = "抢订任务", sound = "", critical = false } = {}) {
   try {
+    const row = db.prepare("SELECT bark_key FROM users WHERE id=?").get(userId);
+    const key = row?.bark_key ? decryptOpenId(row.bark_key) : BARK_GLOBAL_KEY;
+    if (!key) return { skipped: true };
+    const payload = { device_key: key, title, body, group, ...(sound ? { sound } : {}) };
+    if (critical) Object.assign(payload, { level: "critical", volume: 8 });
     const res = await fetch(`${BARK_SERVER}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_key: BARK_KEY, title, body, group, ...(sound ? { sound } : {}) }),
+      body: JSON.stringify(payload),
     });
     const json = await res.json().catch(() => null);
     return json?.code === 200 ? { ok: true } : { ok: false, error: json?.message || "bark push failed" };
@@ -56,9 +61,9 @@ async function accessToken() {
   return cachedToken.value;
 }
 export async function notifyJobResult(job, options = {}) {
-  const row = db.prepare("SELECT openid_ciphertext,notification_count FROM users WHERE id=?").get(job.userId);
+  const row = db.prepare("SELECT openid_ciphertext,notification_count,bark_key FROM users WHERE id=?").get(job.userId);
   const wechatReady = !!(TEMPLATE_ID && APPID && APP_SECRET && Number(row?.notification_count || 0) > 0 && row?.openid_ciphertext);
-  if (!wechatReady && !BARK_KEY) return { skipped: true }; // 两个通道都不可用才跳过; Bark 不依赖微信配置/额度
+  if (!wechatReady && !(row?.bark_key || BARK_GLOBAL_KEY)) return { skipped: true }; // 两个通道都不可用才跳过; Bark 不依赖微信配置/额度
   const target = job.target || {};
   const first = Array.isArray(target.courts) ? target.courts[0] || {} : target;
   const venue = String(job.venueId || "").slice(0, 10);
@@ -76,9 +81,9 @@ export async function notifyJobResult(job, options = {}) {
     : job.status === "awaiting_payment" ? "待本人付款"
     : "\u9884\u7ea6\u5931\u8d25");
   const amount = Number(target.ext?.totalCost || target.cost || first.cost || 0);
-  // Bark 推送(iOS 锁屏提醒): 全量任务结果, 不占微信订阅额度; 待付款事件带强铃声提醒
+  // Bark 推送(iOS 锁屏提醒): 全量任务结果, 不占微信订阅额度; 待付款事件用 critical 级(穿透勿扰/静音, 需 iOS 授权关键警报)
   const urgent = outcome === "待本人付款";
-  sendBarkPush(`抢订${outcome}`, `${activity} · ¥${amount.toFixed(2)}\n${String(job.result?.message || "").slice(0, 100)}`, { group: String(job.venueId || "任务"), ...(urgent ? { sound: "bell", level: "timeSensitive" } : {}) }).catch(() => {});
+  sendBarkPush(job.userId, `抢订${outcome}`, `${activity} · ¥${amount.toFixed(2)}\n${String(job.result?.message || "").slice(0, 100)}`, { group: String(job.venueId || "任务"), ...(urgent ? { sound: "bell", critical: true } : {}) }).catch(() => {});
   if (!wechatReady) return { ok: true, via: "bark" }; // 微信不可用/额度尽: Bark 已推, 到此结束
   const body = { touser: decryptOpenId(row.openid_ciphertext), template_id: TEMPLATE_ID, page: "pages/jobs/index", data: {
     thing2: { value: activity },
