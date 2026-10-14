@@ -302,7 +302,10 @@ async function runGrab(job, credentialArg, venueArg, preparedTargetPromiseArg = 
     elapsedMs = Date.now() - startedMs;
     if (requiresManualPayment(job, result)) {
       console.log(`[grab] job=${job.id} venue=${job.venueId} awaiting-payment elapsedMs=${elapsedMs} orderId=${result.orderId} message=${String(result.message || "订单已创建").slice(0, 160)}`);
-      markAwaitingPayment(job, result, elapsedMs);
+      // 进入待支付窗口立即推送——付款窗口仅数分钟(crland 6 分钟), 这是全程最需要提醒的时刻,
+      // 不推送用户根本来不及打开微信付款(文案"待本人付款", Bark critical 级穿透勿扰)
+      const awaiting = markAwaitingPayment(job, result, elapsedMs);
+      if (awaiting) notifyJobResult(awaiting).catch((error) => console.warn("[notification]", error.message));
       return;
     }
     if (result?.success !== true && fallbackEnabled(job)) {
