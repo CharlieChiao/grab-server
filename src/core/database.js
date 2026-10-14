@@ -69,6 +69,7 @@ function ensureTableColumn(table, name, definition) {
 ensureTableColumn("scavenge_tasks", "court_type", "TEXT"); // 捡漏任务限定的场地类型(旧单值列, 已被 court_types_json 取代)
 ensureTableColumn("job_history", "notify_pending", "INTEGER"); // 暂缓的失败通知(any 策略组, 等组终结按组结果决定文案)
 ensureTableColumn("users", "bark_key", "TEXT"); // Bark 推送 device key(AES-GCM 加密存, iOS 锁屏通知)
+ensureTableColumn("users", "bark_server", "TEXT"); // Bark 自建服务器地址(从粘贴的 URL 解析, 空则用官方 api.day.app)
 ensureTableColumn("scavenge_tasks", "pay_order_json", "TEXT");
 ensureTableColumn("scavenge_tasks", "court_types_json", "TEXT"); // 捡漏任务限定的场地类型数组(tennis/pickle/...), 至少一项
 ensureTableColumn("scavenge_tasks", "archived", "INTEGER NOT NULL DEFAULT 0"); // 归档(进入历史区), 停止/订满后可归档

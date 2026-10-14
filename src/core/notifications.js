@@ -15,12 +15,13 @@ let cachedToken = null;
 // level: active(默认)/timeSensitive(穿透专注模式)/critical(穿透勿扰+静音, 需在 iOS 给 Bark 授权"关键警报")
 async function sendBarkPush(userId, title, body, { group = "抢订任务", sound = "", critical = false } = {}) {
   try {
-    const row = db.prepare("SELECT bark_key FROM users WHERE id=?").get(userId);
+    const row = db.prepare("SELECT bark_key,bark_server FROM users WHERE id=?").get(userId);
     const key = row?.bark_key ? decryptOpenId(row.bark_key) : BARK_GLOBAL_KEY;
     if (!key) return { skipped: true };
+    const server = row?.bark_server || BARK_SERVER;
     const payload = { device_key: key, title, body, group, ...(sound ? { sound } : {}) };
     if (critical) Object.assign(payload, { level: "critical", volume: 8 });
-    const res = await fetch(`${BARK_SERVER}/push`, {
+    const res = await fetch(`${server}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

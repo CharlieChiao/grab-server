@@ -52,27 +52,45 @@ router.put("/me", (req, res) => {
   res.json(profileResponse(row));
 });
 
-// Bark 推送配置(iOS): key 加密存储; 置空清除
+// Bark 输入解析: 支持纯 key / 完整 URL / curl 命令(Bark App"复制"出来的是含 URL 的整段文本, 直接粘贴即可)
+// 返回 { key, server } — server 仅在自建服务器 URL 时返回, 官方 api.day.app 返回 null
+export function extractBarkInput(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  // 任意文本中找第一个 bark 风格 URL: https://host/key (key 为 20-64 位字母数字)
+  const m = s.match(/https?:\/\/([^/\s"'`]+)\/([A-Za-z0-9_-]{20,64})(?:[/?\s"'`]|$)/);
+  if (m) {
+    const server = /^api\.day\.app$/.test(m[1]) ? null : `https://${m[1]}`;
+    return { key: m[2], server };
+  }
+  // 纯 key
+  if (/^[A-Za-z0-9_-]{20,64}$/.test(s)) return { key: s, server: null };
+  return null;
+}
+
+// Bark 推送配置(iOS): 输入可为纯 key/URL/curl 命令, 服务器自动解析提取; 置空清除
 router.put("/me/bark-key", (req, res) => {
   const raw = String(req.body?.barkKey || "").trim();
   if (!raw) {
-    db.prepare("UPDATE users SET bark_key=NULL WHERE id=?").run(req.user.id);
+    db.prepare("UPDATE users SET bark_key=NULL,bark_server=NULL WHERE id=?").run(req.user.id);
     const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer,bark_key FROM users WHERE id=?").get(req.user.id);
     return res.json(profileResponse(row));
   }
-  if (!/^[A-Za-z0-9_-]{20,64}$/.test(raw)) return res.status(400).json({ error: "Bark Key 格式无效(在 Bark App 首页复制, 形如 yJVuKyUP...)" });
-  db.prepare("UPDATE users SET bark_key=? WHERE id=?").run(encryptOpenId(raw), req.user.id);
+  const parsed = extractBarkInput(raw);
+  if (!parsed) return res.status(400).json({ error: "未识别出 Bark Key——请直接粘贴 Bark App 首页\"复制\"的完整链接(形如 https://api.day.app/xxxx)" });
+  db.prepare("UPDATE users SET bark_key=?,bark_server=? WHERE id=?").run(encryptOpenId(parsed.key), parsed.server, req.user.id);
   const row = db.prepare("SELECT nickname,avatar_mime,avatar_data,profile_updated_at,developer,bark_key FROM users WHERE id=?").get(req.user.id);
   res.json(profileResponse(row));
 });
 
 // Bark 测试推送(验证绑定有效性)
 router.post("/me/bark-test", async (req, res) => {
-  const row = db.prepare("SELECT bark_key FROM users WHERE id=?").get(req.user.id);
+  const row = db.prepare("SELECT bark_key,bark_server FROM users WHERE id=?").get(req.user.id);
   if (!row?.bark_key) return res.status(400).json({ error: "尚未配置 Bark Key" });
   try {
     const key = decryptOpenId(row.bark_key);
-    const push = await fetch(`${process.env.BARK_SERVER || "https://api.day.app"}/push`, {
+    const server = row.bark_server || process.env.BARK_SERVER || "https://api.day.app";
+    const push = await fetch(`${server}/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_key: key, title: "抢订通知测试", body: "Bark 绑定成功！任务结果将实时推送到这台 iPhone。", group: "测试" }),
