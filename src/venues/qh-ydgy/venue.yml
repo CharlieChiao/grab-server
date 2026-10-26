@@ -1,0 +1,65 @@
+id: qh-ydgy
+name: 前海运动公园
+desc: i深体(sztyzx)·前海运动公园, 网球场 2 片 + 网篮训练场, 微信扫码支付
+backend:
+  base: https://sports.sztyzx.com.cn
+  orgId: 1148                # 前海运动公园(网球、篮球)
+  orderOrgId: 687            # 我的订单查询用上级 org(深圳市体育中心运营管理)
+  sportscatId: 1652          # 网球
+  sportscatName: 网球
+  groundtypeId: 1824         # 网球场地类型
+  sportsType: 5
+  applicationId: '4'
+# 平台声明 normalAdvanceDays=3(可订今天+明天+后天); 放场时刻未实测(大概率自然日 0 点翻页):
+# fireAt 排 D-2 的 00:00, 被拒则 watch 模式轮询场次、放场瞬间自动下单; 实测校准后修正 at 并删 bookableDays 安全网
+advanceDays:
+  tennis: 3
+bookableDays: 3
+release:
+  timezone: Asia/Shanghai
+  rules:
+    tennis:
+      mode: calendar-day-batch
+      calendarDaysBefore: 2
+      at: '00:00:00.000'
+bookingHours:
+  start: '07:30'
+  end: '23:30'
+  slotMinutes: 60
+# 下单金额取场次实时价(actualAmt=priceInfoList.price), 任务的"场次总价"可不填
+targetCostOptional: true
+# payLatestTime = 下单时刻 + 10 分钟, 超时场馆自动取消订单并释放场次
+paymentTimeoutMinutes: 10
+releaseRetry:
+  unavailableGraceMs: 15000
+  defaultMinIntervalMs: 2000
+  maxAttempts: 6
+  watchSlotRelease: true
+courts:
+  - name: 1号场
+    type: tennis
+    uid: '11763'
+  - name: 2号场
+    type: tennis
+    uid: '11764'
+  - name: 网篮训练场(无法比赛)
+    type: tennis
+    uid: '12388'
+credentialSchema:
+  - key: Authorization
+    label: 登录令牌
+    desc: '从小程序抓包获取(Authorization JWT)；有效期约 30 天，ready 检测即验证。'
+capture:
+  enabled: true
+  hosts:
+    - sports.sztyzx.com.cn
+  paths:
+    - '/module-*'
+  headers:
+    - Authorization
+  tasks:
+    - id: identity
+      label: 身份凭证
+      source: credential
+      required: true
+      maxAgeHours: 720
