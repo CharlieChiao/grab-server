@@ -95,12 +95,22 @@ export function createSztyzxAdapter(cfg, options = {}) {
       const begin = String(r.useDate || query.date) + " " + String(r.startTime || "");
       const end = String(r.useDate || query.date) + " " + String(r.endTime || "");
       if (!/\d{2}:\d{2}/.test(begin)) continue;
+      // 不可约原因推导(前端点击灰色格子实时查询展示): 过期 > 订满 > 平台锁定 > 兜底
+      let reason = "";
+      if (r.appointFlag !== 1) {
+        const beginMs = Date.parse(String(r.useDate || query.date) + "T" + String(r.startTime || "") + "+08:00");
+        if (Number(r.priceInfoList?.[0]?.remainnum) === 0) reason = "已订满(该场次被订完)";
+        else if (r.roundStatus === 5 || (Number.isFinite(beginMs) && beginMs < Date.now())) reason = "场次已开始或已过期";
+        else if (r.roundStatus === 2) reason = "已被预订或平台锁定";
+        else reason = "平台标记不可预约";
+      }
       slots.push({
         uid: String(r.placeId),
         court: aliasByUid[String(r.placeId)] || r.placeName || r.roundName || r.placeId,
         begin, end,
         canAppoint: r.appointFlag === 1 && price > 0,
         cost: price,
+        reason,                  // 不可约具体原因(可约时为空)
         roundId: r.id,               // 下单 itemsId
         priceId: r.priceInfoList?.[0]?.id, // 下单 priceId
         remainnum: Number(r.priceInfoList?.[0]?.remainnum ?? 1),
