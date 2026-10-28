@@ -95,20 +95,24 @@ export function createSztyzxAdapter(cfg, options = {}) {
       const begin = String(r.useDate || query.date) + " " + String(r.startTime || "");
       const end = String(r.useDate || query.date) + " " + String(r.endTime || "");
       if (!/\d{2}:\d{2}/.test(begin)) continue;
-      // 不可约原因推导(前端点击灰色格子实时查询展示): 过期 > 订满 > 平台锁定 > 兜底
+      // 不可约原因推导(前端点击灰色格子实时查询展示); 过期 > 被订 > 占用锁定 > 兜底
+      // 可约判定实证(2026-10-29 calcOrderAmt 试算): appointFlag=1 仅表示"预约窗口开放",
+      // roundStatus=4(课程/包场/锁定)的场次仍标 appointFlag=1 且 remainnum=1, 但下单必被拒("存在不可预订的场次") —
+      // 真可订 = appointFlag=1 且 roundStatus=1(i深体 前端同款渲染依据)
       let reason = "";
-      if (r.appointFlag !== 1) {
+      if (r.appointFlag !== 1 || r.roundStatus !== 1) {
         const beginMs = Date.parse(String(r.useDate || query.date) + "T" + String(r.startTime || "") + "+08:00");
-        if (Number(r.priceInfoList?.[0]?.remainnum) === 0) reason = "已订满(该场次被订完)";
-        else if (r.roundStatus === 5 || (Number.isFinite(beginMs) && beginMs < Date.now())) reason = "场次已开始或已过期";
-        else if (r.roundStatus === 2) reason = "已被预订或平台锁定";
-        else reason = "平台标记不可预约";
+        if (r.roundStatus === 5 || (Number.isFinite(beginMs) && beginMs < Date.now())) reason = "场次已开始或已过期";
+        else if (r.roundStatus === 2) reason = "已被预订";
+        else if (r.roundStatus === 4) reason = "已被占用或锁定(课程/包场等)";
+        else if (r.appointFlag !== 1) reason = "平台标记不可预约";
+        else reason = "平台标记不可预订";
       }
       slots.push({
         uid: String(r.placeId),
         court: aliasByUid[String(r.placeId)] || r.placeName || r.roundName || r.placeId,
         begin, end,
-        canAppoint: r.appointFlag === 1 && price > 0,
+        canAppoint: r.appointFlag === 1 && r.roundStatus === 1 && price > 0,
         cost: price,
         reason,                  // 不可约具体原因(可约时为空)
         roundId: r.id,               // 下单 itemsId
