@@ -34,6 +34,18 @@ releaseRetry:
   maxAttempts: 6
   # 未放场失败 → watch 模式: 500ms 轮询场次 canAppoint(查询接口无风控, 不占下单队列), 可约立即下单(50ms 校准节奏)
   watchSlotRelease: true
+  # 下单重试校准(2026-10-29 实测): 6 样本 64~315ms 连续下单无风控, 最小安全间隔 0ms + 30ms 抖动。
+  # 限流器(requestLimiter)统一采用该值, 取代 riskProfile 保守默认 1500ms
+  fastRetry:
+    minIntervalMs: 0
+    jitterMs: 30
+    calibration:
+      extraWaitMs: 0
+      sampleCount: 6
+      observedMinDispatchGapMs: 64
+      observedMaxDispatchGapMs: 315
+      calibratedAt: '2026-10-29T03:18:50.432Z'
+      endpoint: create-appointment
 courts:
   - name: 1号场深圳
     type: tennis
