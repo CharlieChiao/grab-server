@@ -358,8 +358,13 @@ export function classifyResult(result) {
 }
 export function linearRetryDelay(profile, classification) {
   const b = profile.booking || {};
-  const base = (classification === "not-released" || classification === "release-pending") ? Number(b.notReleasedIntervalMs || b.minIntervalMs || 3000) : classification === "transient" ? Number(b.transientIntervalMs || b.minIntervalMs || 3000) : Number(b.cooldownMs || 10000);
-  return base + Math.floor(Math.random() * (Number(b.jitterMs || 0) + 1));
+  // 显式区分"配置为 0"与"未配置": crland transientIntervalMs=0 表示 scheduler 层不额外等待,
+  // 节奏完全交给限流器的校准值/默认间隔 —— 旧写法 b.transientIntervalMs || b.minIntervalMs 把 0 当假值回退, 凭空多等一倍
+  const pick = (value, fallback) => (value != null && Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const base = (classification === "not-released" || classification === "release-pending") ? pick(b.notReleasedIntervalMs, pick(b.minIntervalMs, 3000))
+    : classification === "transient" ? pick(b.transientIntervalMs, pick(b.minIntervalMs, 3000))
+    : pick(b.cooldownMs, 10000);
+  return Math.max(0, base) + Math.floor(Math.random() * (Number(b.jitterMs || 0) + 1));
 }
 function recordAttempt(job, attempt, dispatchedMs, classification, durationMs, message) {
   const plannedMs = job.fireAt ? new Date(job.fireAt).getTime() : null;
